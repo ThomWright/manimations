@@ -1,0 +1,10 @@
+[project]
+name = "manimations"
+version = "0.1.0"
+description = "Animations using Manim"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = ["manim>=0.19.0", "numpy>=2.2.5"]
+
+[dependency-groups]
+dev = ["assertpy>=1.1", "pytest>=8.3.5", "ruff>=0.11.9"]
