@@ -11,9 +11,9 @@ from manim import (
     DEGREES,
     DOWN,
     GREEN,
-    RED,
     LEFT,
     LIGHTER_GRAY,
+    RED,
     RIGHT,
     UP,
     X_AXIS,
@@ -26,6 +26,7 @@ from manim import (
     Scene,
     Square,
     VGroup,
+    Write,
     rotate_vector,
 )
 from manim.typing import Vector3D
@@ -91,28 +92,7 @@ class Message(Dot):
         if type == MessageType.REQUEST:
             self.offset = np.random.uniform(0.2, 1)
         elif type.is_response():
-            self.offset = np.random.uniform(-1, -0.2)
-
-    # def show_as_request(self):
-    #     self.type = MessageType.REQUEST
-    #     self.set_color(self.type.color())
-    #     self.reset_time_alive()
-    #     self.set_opacity(0.8)
-    #     self.offset = np.random.uniform(0.2, 1)
-
-    # def show_as_response(self):
-    #     self.type = MessageType.RESPONSE
-    #     self.set_color(self.type.color())
-    #     self.reset_time_alive()
-    #     self.set_opacity(0.8)
-    #     self.offset = np.random.uniform(-1, -0.2)
-
-    # def show_as_failure_response(self):
-    #     self.type = MessageType.FAILURE_RESPONSE
-    #     self.set_color(self.type.color())
-    #     self.reset_time_alive()
-    #     self.set_opacity(0.8)
-    #     self.offset = np.random.uniform(-1, -0.2)
+            self.offset = -self.offset
 
     def reset_time_alive(self):
         self.time_alive = 0.0
@@ -366,14 +346,19 @@ class ClientServerTest(Scene):
         client = Processor(size=SMALL).shift(LEFT * 1.5)
         server = Processor(size=SMALL, failure_rate=0.2).shift(RIGHT * 1.5)
 
+        self.play(
+            FadeIn(client, run_time=0.3),
+            FadeIn(server, run_time=0.3),
+        )
+        self.wait(0.3)
+
         conn = Connection(client.get_right(), server.get_left(), server)
 
-        client.add_client_connection(conn)
-
         self.play(
-            FadeIn(client, run_time=0.2),
-            FadeIn(server, run_time=0.2),
-            FadeIn(conn, run_time=0.2),
+            Write(conn, run_time=0.3),
         )
+        self.wait(0.3)
+
+        client.add_client_connection(conn)
 
         self.wait(10)
