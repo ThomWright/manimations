@@ -13,27 +13,38 @@ from manim import (
     GREEN,
     LEFT,
     LIGHTER_GRAY,
-    PURPLE,
     RED,
     RIGHT,
     UP,
     X_AXIS,
+    YELLOW,
     Dot,
     FadeIn,
+    FadeOut,
     Line,
     ManimColor,
     Mobject,
     Rectangle,
     Scene,
     Square,
+    ValueTracker,
+    Variable,
     VGroup,
     Write,
+    linear,
     rotate_vector,
 )
 from manim.typing import Vector3D
 
 MEDIUM = 1
 SMALL = 0.5
+
+
+def tex_escape_underscores(s: str) -> str:
+    """
+    Escape underscores in a string for LaTeX rendering.
+    """
+    return s.replace("_", "{\\_}")
 
 
 class MessageType(Enum):
@@ -46,7 +57,7 @@ class MessageType(Enum):
         if self == MessageType.REQUEST:
             return BLUE
         elif self == MessageType.RETRY_REQUEST:
-            return PURPLE
+            return YELLOW
         elif self == MessageType.RESPONSE:
             return GREEN
         elif self == MessageType.FAILURE_RESPONSE:
@@ -99,7 +110,7 @@ class Message(Dot):
         self.type = type
         self.set_color(type.color())
         self.set_opacity(0.8)
-        self.reset_time_alive()
+        self._reset_time_alive()
         if type == MessageType.REQUEST:
             self.offset = np.random.uniform(0.2, 1)
             self.attempt = 1
@@ -109,7 +120,7 @@ class Message(Dot):
         elif type.is_response():
             self.offset = -self.offset
 
-    def reset_time_alive(self):
+    def _reset_time_alive(self):
         self.time_alive = 0.0
 
 
@@ -195,44 +206,32 @@ class Connection(VGroup):
         Should be called by the client as part of the update loop, regardless of the number of
         requests.
         """
-        # for _ in range(num_reqs):
-        #     if len(self.ready_msgs) > 0:
-        #         # Recycle message object
-        #         req = self.ready_msgs.pop()
-        #         req.set_type(MessageType.REQUEST)
-        #         req.move_to(self.start)
-        #         self.reqs.add(req)
-        #     else:
-        #         # Create a new message object
-        #         req = Message(size=SMALL).move_to(self.start)
-        #         req.set_type(MessageType.REQUEST)
-        #         self.reqs.add(req)
         for req in reqs:
             req.move_to(self.start)
             self.reqs.add(req)
 
-        self.receive_server_responses()
-        self.update_messages(self.reqs, is_request=True)
-        self.update_messages(self.resps, is_request=False)
+        self._receive_server_responses()
+        self._update_messages(self.reqs, is_request=True)
+        self._update_messages(self.resps, is_request=False)
 
     def ready_responses(self) -> list[Message]:
         """
         Returns any responses which are ready to be sent back to the client.
-        This should be called by the client as part of the update loop.
+        Should be called by the client as part of the update loop.
         """
         ret = self.ready_msgs
         self.ready_msgs = []
         return ret
 
-    def receive_server_responses(self):
+    def _receive_server_responses(self):
         new_resps = self.server.send_responses(self)
         self.resps.add(new_resps)
 
-    def update_messages(self, messages, is_request: bool):
+    def _update_messages(self, messages, is_request: bool):
         """Update position of messages."""
         for msg in messages:
             msg = cast(Message, msg)
-            proportion = self.proportion_of_flight_time(msg)
+            proportion = self._proportion_of_flight_time(msg)
             if proportion > 1:
                 messages.remove(msg)
                 if is_request:
@@ -241,20 +240,21 @@ class Connection(VGroup):
                     msg.hide()
                     self.ready_msgs.append(msg)
             else:
-                self.move_msg_along_line(
+                self._move_msg_along_line(
                     msg, proportion if is_request else 1 - proportion
                 )
 
-    def proportion_of_flight_time(self, msg: Message) -> float:
+    def _proportion_of_flight_time(self, msg: Message) -> float:
         return msg.time_alive / (self.rtt / 2)
 
-    def move_msg_along_line(self, req: Message, proportion: float):
+    def _move_msg_along_line(self, req: Message, proportion: float):
         point = self.line.point_from_proportion(proportion)
         perp = rotate_vector(self.line.get_unit_vector(), 90 * DEGREES)
         offset_vec = perp * Message.radius_base * req.offset
         req.move_to(point + offset_vec)
 
 
+# TODO: Split into Client and Server classes
 class Processor(VGroup):
     def __init__(
         self,
@@ -265,6 +265,7 @@ class Processor(VGroup):
         **kwargs,
     ):
         super().__init__()
+
         square = Square(side_length=1.5 * size, color=BLUE, fill_opacity=0.2, **kwargs)
         self.add(square)
 
@@ -287,8 +288,8 @@ class Processor(VGroup):
 
         def update(m: Mobject, dt: float):
             self.time += dt
-            self.generate_requests(dt)
-            self.process_responses()
+            self._generate_requests(dt)
+            self._process_responses()
 
         self.add_updater(update)
 
@@ -297,7 +298,7 @@ class Processor(VGroup):
         )
 
     @staticmethod
-    def num_new_reqs(dt: float, req_rate: float) -> int:
+    def _num_new_reqs(dt: float, req_rate: float) -> int:
         """
         Returns the number of new requests which would have been created in the given period and
         request rate.
@@ -313,9 +314,9 @@ class Processor(VGroup):
         """
         self.client_connections.append(conn)
 
-    def generate_requests(self, dt: float):
+    def _generate_requests(self, dt: float):
         for conn in self.client_connections:
-            n = Processor.num_new_reqs(dt, self.req_rate)
+            n = Processor._num_new_reqs(dt, self.req_rate)
 
             msgs: list[Message] = []
             for _ in range(n):
@@ -341,19 +342,38 @@ class Processor(VGroup):
 
             conn.send_requests(msgs, dt)
 
-    def process_responses(self):
+    def _process_responses(self):
         for conn in self.client_connections:
             resps = conn.ready_responses()
 
             for msg in resps:
-                if msg.type.is_failure() and self.retry_policy is not None:
-                    retry_interval = self.retry_policy.get_retry_interval(msg.attempt)
-                    heapq.heappush(
-                        self.retries[conn], (self.time + retry_interval, msg)
-                    )
-                else:
-                    msg.hide()
-                    self.unused_msgs.append(msg)
+                if self._try_schedule_retry(msg, conn):
+                    continue
+
+                self._return_message_to_pool(msg)
+
+    def _try_schedule_retry(self, msg: Message, conn: Connection) -> bool:
+        """
+        Attempt to schedule a retry for the message if it's a failure and we have a retry policy.
+
+        Returns True if the message was scheduled for retry, False otherwise.
+        """
+        if msg.type.is_failure() is False or self.retry_policy is None:
+            return False
+
+        retry_interval = self.retry_policy.get_retry_interval(msg.attempt)
+        if retry_interval is None:
+            return False
+
+        heapq.heappush(self.retries[conn], (self.time + retry_interval, msg))
+        return True
+
+    def _return_message_to_pool(self, msg: Message):
+        """
+        Return a message to the unused message pool by hiding it and making it available for reuse.
+        """
+        msg.hide()
+        self.unused_msgs.append(msg)
 
     def process(self, msg: Message, return_to: Connection):
         """
@@ -361,7 +381,7 @@ class Processor(VGroup):
         """
         msg.hide()
 
-        finished_at = self.time + Processor.processing_latency()
+        finished_at = self.time + Processor._processing_latency()
 
         conn: list[tuple[float, Message]] = self.processing[return_to]
         heapq.heappush(conn, (finished_at, msg))
@@ -387,7 +407,7 @@ class Processor(VGroup):
         return responses
 
     @staticmethod
-    def processing_latency() -> float:
+    def _processing_latency() -> float:
         """
         Returns the processing latency of the processor, in seconds.
         """
@@ -424,7 +444,7 @@ class RetryPolicy:
         self.min_interval = min_interval
         self.jitter_factor = jitter_factor
 
-    def get_retry_interval(self, retry_attempt: int) -> float:
+    def get_retry_interval(self, retry_attempt: int) -> float | None:
         """
         Returns the interval to wait before the next retry attempt. The interval increases
         exponentially with each attempt, with some random jitter.
@@ -434,17 +454,40 @@ class RetryPolicy:
         jitter_factor = np.random.uniform(
             1 - self.jitter_factor, 1 + self.jitter_factor
         )
-        if retry_attempt < 1 or retry_attempt > self.max_retry_attempts:
-            raise ValueError(
-                f"Retry count exceeds maximum retries: {retry_attempt} > {self.max_retry_attempts}"
-            )
+        if retry_attempt < 1:
+            raise ValueError(f"Retry count must be 1 or greater, got {retry_attempt}.")
+        if retry_attempt > self.max_retry_attempts:
+            return None
         return self.min_interval * (2 ** (retry_attempt - 1)) * jitter_factor
+
+
+def create_label(
+    m: Mobject, property_name: str, direction: Vector3D = RIGHT
+) -> Variable:
+    """
+    Create a label for the given property of the Mobject.
+    """
+    label = Variable(
+        getattr(m, property_name),
+        tex_escape_underscores(property_name),
+        num_decimal_places=2,
+    )
+    label.width = 3
+    label.next_to(m, direction, buff=0.2)
+
+    def update_label(v: Mobject):
+        v = cast(Variable, v)
+        v.tracker.set_value(getattr(m, property_name))
+
+    label.add_updater(update_label)
+
+    return label
 
 
 class ClientServerTest(Scene):
     def construct(self):
         client = Processor(size=SMALL, retry_policy=RetryPolicy()).shift(LEFT * 1.5)
-        server = Processor(size=SMALL, failure_rate=0.3).shift(RIGHT * 1.5)
+        server = Processor(size=SMALL, failure_rate=0).shift(RIGHT * 1.5)
 
         self.play(
             FadeIn(client, run_time=0.3),
@@ -461,4 +504,25 @@ class ClientServerTest(Scene):
 
         client.add_client_connection(conn)
 
-        self.wait(10)
+        self.wait(5)
+
+        failure_rate = ValueTracker(0)
+        server.add_updater(lambda m: m.set(failure_rate=failure_rate.get_value()))
+        label = create_label(server, "failure_rate")
+        self.play(Write(label), run_time=1)
+
+        self.wait(1)
+
+        self.play(failure_rate.animate.set_value(0.8), run_time=5.0, rate_func=linear)
+
+        self.wait(5)
+
+        self.play(failure_rate.animate.set_value(0), run_time=5.0, rate_func=linear)
+
+        self.wait(2)
+
+        client.set(req_rate=0.0)
+
+        self.wait(2)
+
+        self.play(FadeOut(client), FadeOut(server), FadeOut(conn), FadeOut(label))
