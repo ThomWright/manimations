@@ -13,6 +13,7 @@ from manim import (
     GREEN,
     LEFT,
     LIGHTER_GRAY,
+    PURPLE,
     RED,
     RIGHT,
     UP,
@@ -37,12 +38,15 @@ SMALL = 0.5
 
 class MessageType(Enum):
     REQUEST = "request"
+    RETRY_REQUEST = "retry_request"
     RESPONSE = "response"
     FAILURE_RESPONSE = "failure_response"
 
     def color(self) -> ManimColor:
         if self == MessageType.REQUEST:
             return BLUE
+        elif self == MessageType.RETRY_REQUEST:
+            return PURPLE
         elif self == MessageType.RESPONSE:
             return GREEN
         elif self == MessageType.FAILURE_RESPONSE:
@@ -50,8 +54,14 @@ class MessageType(Enum):
         else:
             raise ValueError(f"Unknown message type: {self}")
 
+    def is_request(self) -> bool:
+        return self in (MessageType.REQUEST, MessageType.RETRY_REQUEST)
+
     def is_response(self) -> bool:
         return self in (MessageType.RESPONSE, MessageType.FAILURE_RESPONSE)
+
+    def is_failure(self) -> bool:
+        return self == MessageType.FAILURE_RESPONSE
 
 
 class Message(Dot):
@@ -68,6 +78,7 @@ class Message(Dot):
         )
         self.id = np.random.randint(0, 1000000)
         self.type = type
+        self.attempt = 1
 
         self.offset = 0
         """Scalar offset perpendicular to the line of flight."""
@@ -91,6 +102,10 @@ class Message(Dot):
         self.reset_time_alive()
         if type == MessageType.REQUEST:
             self.offset = np.random.uniform(0.2, 1)
+            self.attempt = 1
+        elif type == MessageType.RETRY_REQUEST:
+            self.offset = abs(self.offset)
+            self.attempt += 1
         elif type.is_response():
             self.offset = -self.offset
 
@@ -167,38 +182,50 @@ class Connection(VGroup):
         self.line = Line(start, end, color=LIGHTER_GRAY, stroke_opacity=0.8)
         self.reqs = VGroup()
         self.resps = VGroup()
-        self.unused_msgs: list[Message] = []
+        self.ready_msgs: list[Message] = []
 
         self.add(self.line)
         self.add(self.reqs)
         self.add(self.resps)
 
-    def send_requests(self, num_reqs: int, dt: float):
+    def send_requests(self, reqs: list[Message], dt: float):
         """
-        Send the given number of requests along this connection.
+        Send the given requests along this connection.
 
-        Should be called by the client as part of the update loop. Should be called even when
-        `num_reqs` is 0, to ensure that in flight messages are updated.
+        Should be called by the client as part of the update loop, regardless of the number of
+        requests.
         """
-        for _ in range(num_reqs):
-            if len(self.unused_msgs) > 0:
-                # Recycle message object
-                req = self.unused_msgs.pop()
-                req.set_type(MessageType.REQUEST)
-                req.move_to(self.start)
-                self.reqs.add(req)
-            else:
-                # Create a new message object
-                req = Message(size=SMALL).move_to(self.start)
-                req.set_type(MessageType.REQUEST)
-                self.reqs.add(req)
+        # for _ in range(num_reqs):
+        #     if len(self.ready_msgs) > 0:
+        #         # Recycle message object
+        #         req = self.ready_msgs.pop()
+        #         req.set_type(MessageType.REQUEST)
+        #         req.move_to(self.start)
+        #         self.reqs.add(req)
+        #     else:
+        #         # Create a new message object
+        #         req = Message(size=SMALL).move_to(self.start)
+        #         req.set_type(MessageType.REQUEST)
+        #         self.reqs.add(req)
+        for req in reqs:
+            req.move_to(self.start)
+            self.reqs.add(req)
 
-        self.receive_responses()
+        self.receive_server_responses()
         self.update_messages(self.reqs, is_request=True)
         self.update_messages(self.resps, is_request=False)
 
-    def receive_responses(self):
-        new_resps = self.server.take_responses(self)
+    def ready_responses(self) -> list[Message]:
+        """
+        Returns any responses which are ready to be sent back to the client.
+        This should be called by the client as part of the update loop.
+        """
+        ret = self.ready_msgs
+        self.ready_msgs = []
+        return ret
+
+    def receive_server_responses(self):
+        new_resps = self.server.send_responses(self)
         self.resps.add(new_resps)
 
     def update_messages(self, messages, is_request: bool):
@@ -212,7 +239,7 @@ class Connection(VGroup):
                     self.server.process(msg, self)
                 else:
                     msg.hide()
-                    self.unused_msgs.append(msg)
+                    self.ready_msgs.append(msg)
             else:
                 self.move_msg_along_line(
                     msg, proportion if is_request else 1 - proportion
@@ -232,6 +259,7 @@ class Processor(VGroup):
     def __init__(
         self,
         req_rate: float = 5.0,
+        retry_policy: RetryPolicy | None = None,
         failure_rate: float = 0.0,
         size: float = MEDIUM,
         **kwargs,
@@ -241,16 +269,26 @@ class Processor(VGroup):
         self.add(square)
 
         self.req_rate = req_rate
+        self.retry_policy = retry_policy
         self.failure_rate = failure_rate
 
         self.client_connections: list[Connection] = []
         """Connections for which this processor is a client."""
+
+        self.retries: dict[Connection, list[tuple[float, Message]]] = (
+            collections.defaultdict(list)
+        )
+        """Messages which failed and are waiting to be retried."""
+
+        self.unused_msgs: list[Message] = []
+        """Messages which are not currently in use, ready for recycling."""
 
         self.time = 0.0
 
         def update(m: Mobject, dt: float):
             self.time += dt
             self.generate_requests(dt)
+            self.process_responses()
 
         self.add_updater(update)
 
@@ -278,7 +316,44 @@ class Processor(VGroup):
     def generate_requests(self, dt: float):
         for conn in self.client_connections:
             n = Processor.num_new_reqs(dt, self.req_rate)
-            conn.send_requests(n, dt)
+
+            msgs: list[Message] = []
+            for _ in range(n):
+                if len(self.unused_msgs) > 0:
+                    # Recycle message object
+                    req = self.unused_msgs.pop()
+                    req.set_type(MessageType.REQUEST)
+                    msgs.append(req)
+                else:
+                    # Create a new message object
+                    req = Message(size=SMALL)
+                    req.set_type(MessageType.REQUEST)
+                    msgs.append(req)
+
+            while len(self.retries[conn]) > 0:
+                retry_at, msg = self.retries[conn][0]
+                if self.time >= retry_at:
+                    heapq.heappop(self.retries[conn])
+                    msg.set_type(MessageType.RETRY_REQUEST)
+                    msgs.append(msg)
+                else:
+                    break
+
+            conn.send_requests(msgs, dt)
+
+    def process_responses(self):
+        for conn in self.client_connections:
+            resps = conn.ready_responses()
+
+            for msg in resps:
+                if msg.type.is_failure() and self.retry_policy is not None:
+                    retry_interval = self.retry_policy.get_retry_interval(msg.attempt)
+                    heapq.heappush(
+                        self.retries[conn], (self.time + retry_interval, msg)
+                    )
+                else:
+                    msg.hide()
+                    self.unused_msgs.append(msg)
 
     def process(self, msg: Message, return_to: Connection):
         """
@@ -291,28 +366,25 @@ class Processor(VGroup):
         conn: list[tuple[float, Message]] = self.processing[return_to]
         heapq.heappush(conn, (finished_at, msg))
 
-    def take_responses(self, conn: Connection) -> list[Message]:
+    def send_responses(self, conn: Connection) -> list[Message]:
         """
         Remove and return any pending responses for the given connection.
         """
         responses = []
 
-        msgs: list[tuple[float, Message]] = self.processing[conn]
-
-        while True:
-            if len(msgs) == 0:
-                return responses
-
-            finished_at, msg = msgs[0]
-            if self.time > finished_at:
-                heapq.heappop(msgs)
+        while len(self.processing[conn]) > 0:
+            finished_at, msg = self.processing[conn][0]
+            if self.time >= finished_at:
+                heapq.heappop(self.processing[conn])
                 if np.random.uniform() < self.failure_rate:
                     msg.set_type(MessageType.FAILURE_RESPONSE)
                 else:
                     msg.set_type(MessageType.RESPONSE)
                 responses.append(msg)
             else:
-                return responses
+                break
+
+        return responses
 
     @staticmethod
     def processing_latency() -> float:
@@ -341,10 +413,38 @@ class MessageQueueTest(Scene):
         self.wait(2)
 
 
+class RetryPolicy:
+    def __init__(
+        self,
+        max_retry_attempts: int = 3,
+        min_interval: float = 0.1,
+        jitter_factor: float = 0.25,
+    ):
+        self.max_retry_attempts = max_retry_attempts
+        self.min_interval = min_interval
+        self.jitter_factor = jitter_factor
+
+    def get_retry_interval(self, retry_attempt: int) -> float:
+        """
+        Returns the interval to wait before the next retry attempt. The interval increases
+        exponentially with each attempt, with some random jitter.
+
+        :param attempt: The retry attempt number (1-indexed).
+        """
+        jitter_factor = np.random.uniform(
+            1 - self.jitter_factor, 1 + self.jitter_factor
+        )
+        if retry_attempt < 1 or retry_attempt > self.max_retry_attempts:
+            raise ValueError(
+                f"Retry count exceeds maximum retries: {retry_attempt} > {self.max_retry_attempts}"
+            )
+        return self.min_interval * (2 ** (retry_attempt - 1)) * jitter_factor
+
+
 class ClientServerTest(Scene):
     def construct(self):
-        client = Processor(size=SMALL).shift(LEFT * 1.5)
-        server = Processor(size=SMALL, failure_rate=0.2).shift(RIGHT * 1.5)
+        client = Processor(size=SMALL, retry_policy=RetryPolicy()).shift(LEFT * 1.5)
+        server = Processor(size=SMALL, failure_rate=0.3).shift(RIGHT * 1.5)
 
         self.play(
             FadeIn(client, run_time=0.3),
