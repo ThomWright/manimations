@@ -26,16 +26,17 @@ from manim.typing import Vector3D
 import heapq
 import collections
 
-MESSAGE_RADIUS_BASE = 0.15
 
 MEDIUM = 1
 SMALL = 0.5
 
 
 class Message(Dot):
+    radius_base = 0.15
+
     def __init__(self, size: float = MEDIUM, color: ManimColor = BLUE, **kwargs):
         super().__init__(
-            radius=MESSAGE_RADIUS_BASE * size, fill_opacity=0.8, color=color, **kwargs
+            radius=Message.radius_base * size, fill_opacity=0.8, color=color, **kwargs
         )
         self.id = np.random.randint(0, 1000000)
         self.offset = 0
@@ -71,9 +72,9 @@ class Queue(Rectangle):
         self.orientation = orientation
         if np.logical_and(orientation, X_AXIS).any():
             width = 2.0
-            height = MESSAGE_RADIUS_BASE * 4
+            height = Message.radius_base * 4
         else:
-            width = MESSAGE_RADIUS_BASE * 4
+            width = Message.radius_base * 4
             height = 2.0
         super().__init__(
             width=width, height=height, color=BLUE, fill_opacity=0.2, **kwargs
@@ -110,7 +111,7 @@ class Queue(Rectangle):
 
         position = np.array(self.get_center())
         offset = (
-            (queue_pos - 1) * MESSAGE_RADIUS_BASE * 3 + MESSAGE_RADIUS_BASE * 2
+            (queue_pos - 1) * Message.radius_base * 3 + Message.radius_base * 2
         ) * multiplier
         position[axis] = reference_point[axis] + offset
 
@@ -120,19 +121,17 @@ class Queue(Rectangle):
 class Connection(VGroup):
     def __init__(
         self,
-        server: Processor,
         start: Vector3D,
         end: Vector3D,
-        req_rate: float = 5.0,
+        server: Processor,
         rtt: float = 2.0,
     ):
         super().__init__()
         self.id = np.random.randint(0, 1000000)
         self.start = start
         self.end = end
-        self.req_rate = req_rate
-        self.rtt = rtt
         self.server = server
+        self.rtt = rtt
 
         self.line = Line(start, end, color=LIGHTER_GRAY, stroke_opacity=0.8)
         self.reqs = VGroup()
@@ -143,27 +142,14 @@ class Connection(VGroup):
         self.add(self.reqs)
         self.add(self.resps)
 
-        def update(m: Mobject, dt: float):
-            self.update_reqs(dt)
-
-        self.add_updater(lambda m, dt: update(m, dt))
-
-    @staticmethod
-    def num_new_reqs(dt: float, req_rate: float) -> int:
+    def send_requests(self, num_reqs: int, dt: float):
         """
-        Returns the number of new requests which would have been created in the given period and
-        request rate.
+        Send the given number of requests along this connection.
+
+        Should be called by the client as part of the update loop. Should be called even when
+        `num_reqs` is 0, to ensure that in flight messages are updated.
         """
-        # Number of requests created per dt
-        lam = req_rate * dt
-
-        return np.random.poisson(lam)
-
-    def update_reqs(self, dt: float):
-        # Generate new requests
-        # TODO: generate these in the client
-        n_new_reqs = Connection.num_new_reqs(dt, self.req_rate)
-        for _ in range(n_new_reqs):
+        for _ in range(num_reqs):
             if len(self.unused_msgs) > 0:
                 # Recycle message object
                 req = self.unused_msgs.pop()
@@ -176,32 +162,32 @@ class Connection(VGroup):
                 req.show_as_request()
                 self.reqs.add(req)
 
-        # Move requests along
-        for req in self.reqs:
-            req = cast(Message, req)
-            proportion = self.proportion_of_flight_time(req)
-            if proportion > 1:
-                self.reqs.remove(req)
-                self.server.process(req, self)
-            else:
-                self.move_msg_along_line(req, proportion)
+        self.receive_responses()
+        self.update_messages(self.reqs, is_request=True)
+        self.update_messages(self.resps, is_request=False)
 
-        # Take new responses from the server
+    def receive_responses(self):
         new_resps = self.server.take_responses(self)
         for resp in new_resps:
             resp.show_as_response()
         self.resps.add(new_resps)
 
-        # Move responses along
-        for resp in self.resps:
-            resp = cast(Message, resp)
-            proportion = 1 - self.proportion_of_flight_time(resp)
-            if proportion < 0:
-                resp.hide()
-                self.resps.remove(resp)
-                self.unused_msgs.append(resp)
+    def update_messages(self, messages, is_request: bool):
+        """Update position of messages."""
+        for msg in messages:
+            msg = cast(Message, msg)
+            proportion = self.proportion_of_flight_time(msg)
+            if proportion > 1:
+                messages.remove(msg)
+                if is_request:
+                    self.server.process(msg, self)
+                else:
+                    msg.hide()
+                    self.unused_msgs.append(msg)
             else:
-                self.move_msg_along_line(resp, proportion)
+                self.move_msg_along_line(
+                    msg, proportion if is_request else 1 - proportion
+                )
 
     def proportion_of_flight_time(self, msg: Message) -> float:
         return msg.time_alive / (self.rtt / 2)
@@ -209,26 +195,59 @@ class Connection(VGroup):
     def move_msg_along_line(self, req: Message, proportion: float):
         point = self.line.point_from_proportion(proportion)
         perp = rotate_vector(self.line.get_unit_vector(), 90 * DEGREES)
-        offset_vec = perp * MESSAGE_RADIUS_BASE * req.offset
+        offset_vec = perp * Message.radius_base * req.offset
         req.move_to(point + offset_vec)
 
 
 class Processor(VGroup):
-    def __init__(self, size: float = MEDIUM, **kwargs):
+    def __init__(
+        self,
+        req_rate: float = 5.0,
+        size: float = MEDIUM,
+        **kwargs,
+    ):
         super().__init__()
         square = Square(side_length=1.5 * size, color=BLUE, fill_opacity=0.2, **kwargs)
         self.add(square)
 
+        self.req_rate = req_rate
+
+        self.client_connections: list[Connection] = []
+        """Connections for which this processor is a client."""
+
         self.time = 0.0
 
-        def update_time(m: Mobject, dt: float):
+        def update(m: Mobject, dt: float):
             self.time += dt
+            self.generate_requests(dt)
 
-        self.add_updater(update_time)
+        self.add_updater(update)
 
         self.processing: dict[Connection, list[tuple[float, Message]]] = (
             collections.defaultdict(list)
         )
+
+    @staticmethod
+    def num_new_reqs(dt: float, req_rate: float) -> int:
+        """
+        Returns the number of new requests which would have been created in the given period and
+        request rate.
+        """
+        # Number of requests created per dt
+        lam = req_rate * dt
+
+        return np.random.poisson(lam)
+
+    def add_client_connection(self, conn: Connection):
+        """
+        Add a connection for which this processor is a client.
+        """
+        self.client_connections.append(conn)
+
+    def generate_requests(self, dt: float):
+        for conn in self.client_connections:
+            n = Processor.num_new_reqs(dt, self.req_rate)
+            conn.send_requests(n, dt)
 
     def process(self, msg: Message, return_to: Connection):
         """
@@ -236,8 +255,7 @@ class Processor(VGroup):
         """
         msg.hide()
 
-        processing_time = Processor.processing_latency()
-        finished_at = self.time + processing_time
+        finished_at = self.time + Processor.processing_latency()
 
         conn: list[tuple[float, Message]] = self.processing[return_to]
         heapq.heappush(conn, (finished_at, msg))
@@ -253,52 +271,54 @@ class Processor(VGroup):
         while True:
             if len(msgs) == 0:
                 return responses
+
             finished_at, msg = msgs[0]
             if self.time > finished_at:
                 heapq.heappop(msgs)
                 responses.append(msg)
             else:
-                break
-
-        return responses
+                return responses
 
     @staticmethod
     def processing_latency() -> float:
         """
         Returns the processing latency of the processor, in seconds.
         """
-        tasks = 3.0
-        rate = 8.0
+        tasks = 3.0  # Number of tasks to simulate
+        rate = 8.0  # Average rate of tasks per second
         return np.random.gamma(tasks, 1 / rate)
 
 
 class MessageQueueTest(Scene):
     def construct(self):
-        # queue = Queue().shift(LEFT)
-        # processor = Processor().shift(RIGHT * 2)
-        # msg1 = Message().move_to(queue.position(1))
-        # msg2 = Message().move_to(queue.position(2))
+        queue = Queue().shift(LEFT)
+        processor = Processor().shift(RIGHT * 2)
+        msg1 = Message().move_to(queue.position(1))
+        msg2 = Message().move_to(queue.position(2))
 
+        self.play(
+            FadeIn(queue, run_time=0.2),
+            FadeIn(msg1, run_time=0.2),
+            FadeIn(msg2, run_time=0.2),
+        )
+        self.play(FadeIn(processor, run_time=0.2))
+
+        self.wait(2)
+
+
+class ClientServerTest(Scene):
+    def construct(self):
         client = Processor(size=SMALL).shift(LEFT * 1.5)
         server = Processor(size=SMALL).shift(RIGHT * 1.5)
 
-        conn = Connection(server, client.get_right(), server.get_left())
+        conn = Connection(client.get_right(), server.get_left(), server)
 
-        # v_queue = Queue(orientation=DOWN).shift(DOWN * 2)
-        # v_msg1 = Message().move_to(v_queue.position(1))
-        # v_msg2 = Message().move_to(v_queue.position(2))
+        client.add_client_connection(conn)
 
         self.play(
-            # FadeIn(queue, run_time=0.2),
-            # FadeIn(msg1, run_time=0.2),
-            # FadeIn(msg2, run_time=0.2),
             FadeIn(client, run_time=0.2),
             FadeIn(server, run_time=0.2),
             FadeIn(conn, run_time=0.2),
-            # FadeIn(v_queue, run_time=0.2),
-            # FadeIn(v_msg1, run_time=0.2),
-            # FadeIn(v_msg2, run_time=0.2),
         )
-        # self.play(FadeIn(processor, run_time=0.2))
 
         self.wait(10)
