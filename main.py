@@ -1,44 +1,73 @@
 from __future__ import annotations
+
+import collections
+import heapq
+from enum import Enum
 from typing import cast
+
+import numpy as np
 from manim import (
+    BLUE,
+    DEGREES,
+    DOWN,
+    GREEN,
+    RED,
+    LEFT,
+    LIGHTER_GRAY,
+    RIGHT,
+    UP,
+    X_AXIS,
     Dot,
-    Rectangle,
-    Square,
-    Scene,
     FadeIn,
-    VGroup,
     Line,
     ManimColor,
     Mobject,
-    DEGREES,
-    BLUE,
-    GREEN,
-    LIGHTER_GRAY,
-    LEFT,
-    RIGHT,
-    DOWN,
-    UP,
-    X_AXIS,
+    Rectangle,
+    Scene,
+    Square,
+    VGroup,
     rotate_vector,
 )
-import numpy as np
 from manim.typing import Vector3D
-import heapq
-import collections
-
 
 MEDIUM = 1
 SMALL = 0.5
 
 
+class MessageType(Enum):
+    REQUEST = "request"
+    RESPONSE = "response"
+    FAILURE_RESPONSE = "failure_response"
+
+    def color(self) -> ManimColor:
+        if self == MessageType.REQUEST:
+            return BLUE
+        elif self == MessageType.RESPONSE:
+            return GREEN
+        elif self == MessageType.FAILURE_RESPONSE:
+            return RED
+        else:
+            raise ValueError(f"Unknown message type: {self}")
+
+    def is_response(self) -> bool:
+        return self in (MessageType.RESPONSE, MessageType.FAILURE_RESPONSE)
+
+
 class Message(Dot):
     radius_base = 0.15
 
-    def __init__(self, size: float = MEDIUM, color: ManimColor = BLUE, **kwargs):
+    def __init__(
+        self, size: float = MEDIUM, type: MessageType = MessageType.REQUEST, **kwargs
+    ):
         super().__init__(
-            radius=Message.radius_base * size, fill_opacity=0.8, color=color, **kwargs
+            radius=Message.radius_base * size,
+            fill_opacity=0.8,
+            color=type.color(),
+            **kwargs,
         )
         self.id = np.random.randint(0, 1000000)
+        self.type = type
+
         self.offset = 0
         """Scalar offset perpendicular to the line of flight."""
         self.time_alive = 0.0
@@ -51,17 +80,39 @@ class Message(Dot):
     def hide(self):
         self.set_opacity(0.0)
 
-    def show_as_request(self):
-        self.reset_time_alive()
+    def set_type(self, type: MessageType):
+        """
+        Set the type of the message and update its color accordingly.
+        """
+        self.type = type
+        self.set_color(type.color())
         self.set_opacity(0.8)
-        self.set_color(BLUE)
-        self.offset = np.random.uniform(0.2, 1)
+        self.reset_time_alive()
+        if type == MessageType.REQUEST:
+            self.offset = np.random.uniform(0.2, 1)
+        elif type.is_response():
+            self.offset = np.random.uniform(-1, -0.2)
 
-    def show_as_response(self):
-        self.reset_time_alive()
-        self.set_opacity(0.8)
-        self.set_color(GREEN)
-        self.offset = np.random.uniform(-1, -0.2)
+    # def show_as_request(self):
+    #     self.type = MessageType.REQUEST
+    #     self.set_color(self.type.color())
+    #     self.reset_time_alive()
+    #     self.set_opacity(0.8)
+    #     self.offset = np.random.uniform(0.2, 1)
+
+    # def show_as_response(self):
+    #     self.type = MessageType.RESPONSE
+    #     self.set_color(self.type.color())
+    #     self.reset_time_alive()
+    #     self.set_opacity(0.8)
+    #     self.offset = np.random.uniform(-1, -0.2)
+
+    # def show_as_failure_response(self):
+    #     self.type = MessageType.FAILURE_RESPONSE
+    #     self.set_color(self.type.color())
+    #     self.reset_time_alive()
+    #     self.set_opacity(0.8)
+    #     self.offset = np.random.uniform(-1, -0.2)
 
     def reset_time_alive(self):
         self.time_alive = 0.0
@@ -153,13 +204,13 @@ class Connection(VGroup):
             if len(self.unused_msgs) > 0:
                 # Recycle message object
                 req = self.unused_msgs.pop()
-                req.show_as_request()
+                req.set_type(MessageType.REQUEST)
                 req.move_to(self.start)
                 self.reqs.add(req)
             else:
                 # Create a new message object
                 req = Message(size=SMALL).move_to(self.start)
-                req.show_as_request()
+                req.set_type(MessageType.REQUEST)
                 self.reqs.add(req)
 
         self.receive_responses()
@@ -168,8 +219,6 @@ class Connection(VGroup):
 
     def receive_responses(self):
         new_resps = self.server.take_responses(self)
-        for resp in new_resps:
-            resp.show_as_response()
         self.resps.add(new_resps)
 
     def update_messages(self, messages, is_request: bool):
@@ -203,6 +252,7 @@ class Processor(VGroup):
     def __init__(
         self,
         req_rate: float = 5.0,
+        failure_rate: float = 0.0,
         size: float = MEDIUM,
         **kwargs,
     ):
@@ -211,6 +261,7 @@ class Processor(VGroup):
         self.add(square)
 
         self.req_rate = req_rate
+        self.failure_rate = failure_rate
 
         self.client_connections: list[Connection] = []
         """Connections for which this processor is a client."""
@@ -275,6 +326,10 @@ class Processor(VGroup):
             finished_at, msg = msgs[0]
             if self.time > finished_at:
                 heapq.heappop(msgs)
+                if np.random.uniform() < self.failure_rate:
+                    msg.set_type(MessageType.FAILURE_RESPONSE)
+                else:
+                    msg.set_type(MessageType.RESPONSE)
                 responses.append(msg)
             else:
                 return responses
@@ -309,7 +364,7 @@ class MessageQueueTest(Scene):
 class ClientServerTest(Scene):
     def construct(self):
         client = Processor(size=SMALL).shift(LEFT * 1.5)
-        server = Processor(size=SMALL).shift(RIGHT * 1.5)
+        server = Processor(size=SMALL, failure_rate=0.2).shift(RIGHT * 1.5)
 
         conn = Connection(client.get_right(), server.get_left(), server)
 
