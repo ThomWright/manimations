@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import collections
 import heapq
+import statistics
 from enum import Enum
-from typing import cast
+from typing import Callable, TypeVar, cast
 
 import numpy as np
 from manim import (
@@ -13,6 +14,7 @@ from manim import (
     GREEN,
     LEFT,
     LIGHTER_GRAY,
+    ORANGE,
     RED,
     RIGHT,
     UP,
@@ -30,6 +32,7 @@ from manim import (
     ValueTracker,
     Variable,
     VGroup,
+    VMobject,
     Write,
     linear,
     rotate_vector,
@@ -37,7 +40,28 @@ from manim import (
 from manim.typing import Vector3D
 
 MEDIUM = 1
+""" Scaling factor for medium-sized objects. """
 SMALL = 0.5
+""" Scaling factor for small-sized objects. """
+
+X_DIM = 0
+""" Index into a vector for the x-coordinate. """
+Y_DIM = 1
+""" Index into a vector for the y-coordinate. """
+
+# Copied from Manim internals.
+STROKE_WIDTH_CONVERSION = 0.01
+"""Conversion factor for stroke width to Manim units."""
+
+
+def stroke_width_buffer(mob: VMobject, overlap=False) -> float:
+    """
+    Returns the buffer to use when positioning objects relative to the stroke width of the given
+    Mobject.
+    """
+    return STROKE_WIDTH_CONVERSION * mob.stroke_width - (
+        STROKE_WIDTH_CONVERSION if overlap else 0
+    )
 
 
 def tex_escape_underscores(s: str) -> str:
@@ -308,6 +332,23 @@ class Processor(VGroup):
 
         return np.random.poisson(lam)
 
+    def concurrency(self) -> int:
+        """
+        Returns the number of concurrent requests being processed by this processor.
+        """
+        return sum(len(v) for v in self.processing.values())
+
+    def concurrency_by_type(self) -> dict[MessageType, int]:
+        """
+        Returns the number of concurrent requests being processed by this processor, grouped by
+        message type.
+        """
+        concurrency = collections.defaultdict(int)
+        for conn in self.processing.values():
+            for _, msg in conn:
+                concurrency[msg.type] += 1
+        return dict(concurrency)
+
     def add_client_connection(self, conn: Connection):
         """
         Add a connection for which this processor is a client.
@@ -461,27 +502,149 @@ class RetryPolicy:
         return self.min_interval * (2 ** (retry_attempt - 1)) * jitter_factor
 
 
+M = TypeVar("M", bound=Mobject)
+
+
 def create_label(
-    m: Mobject, property_name: str, direction: Vector3D = RIGHT
+    m: M,
+    f: Callable[[M], int | float],
+    name: str,
+    direction: Vector3D = RIGHT,
+    buff: float = 0.2,
 ) -> Variable:
     """
     Create a label for the given property of the Mobject.
     """
     label = Variable(
-        getattr(m, property_name),
-        tex_escape_underscores(property_name),
+        f(m),
+        tex_escape_underscores(name),
         num_decimal_places=2,
     )
-    label.width = 3
-    label.next_to(m, direction, buff=0.2)
+
+    for sm in label.submobjects:
+        sm.set(font_size=24)
+    label.arrange_submobjects()
+
+    label.next_to(m, direction, buff=buff)
 
     def update_label(v: Mobject):
         v = cast(Variable, v)
-        v.tracker.set_value(getattr(m, property_name))
+        v.tracker.set_value(f(m))
 
     label.add_updater(update_label)
 
     return label
+
+
+class StackedBar(VGroup):
+    """
+    A stacked bar chart that can be used to visualize multiple values.
+    """
+
+    # Scaling the bars doesn't work if the size gets set to 0.
+    min_bar_size = 0.01
+
+    def __init__(
+        self,
+        max_value: float,
+        values: list[float],
+        colors: list[ManimColor] = [BLUE, YELLOW, ORANGE, RED],
+        bar_length: float = 1.5,
+        bar_width: float = 0.3,
+        direction: Vector3D = UP,
+        base_z_index: int = 0,
+        **kwargs,
+    ):
+        super().__init__(**kwargs)
+        self.values = values
+        self.colors = colors
+        self.max_value = max_value
+        self.bar_length = max(bar_length, StackedBar.min_bar_size)
+        self.bar_width = max(bar_width, StackedBar.min_bar_size)
+        self.direction = direction
+        self.is_vertical = True if direction is UP or direction is DOWN else False
+        self.base_z_index = base_z_index
+        self.bars: list[Rectangle] = []
+
+        self._create_bars()
+        self._arrange_bars()
+
+    def set_values(self, values: list[float]):
+        """
+        Set new values for the stacked bar and update the bars accordingly.
+        """
+        if len(values) != len(self.bars):
+            raise ValueError(
+                "Number of values must match the number of bars in the stacked bar."
+            )
+        self.values = values
+        self._arrange_bars()
+
+    def _create_bars(self):
+        for i, (value, color) in enumerate(zip(self.values, self.colors)):
+            # Scale the actual value to the length
+            bar_length = (value / self.max_value) * self.bar_length
+
+            # Set size based on orientation
+            if self.is_vertical:
+                width = max(self.bar_width, StackedBar.min_bar_size)
+                height = max(bar_length, StackedBar.min_bar_size)
+            else:
+                width = max(bar_length, StackedBar.min_bar_size)
+                height = max(self.bar_width, StackedBar.min_bar_size)
+
+            # Create bar
+            bar = Rectangle(
+                width=width,
+                height=height,
+                fill_color=color,
+                fill_opacity=1,
+                stroke_color=color,
+                # Draw from front to back
+                z_index=self.base_z_index + len(self.values) - i,
+            )
+
+            self.bars.append(bar)
+            self.add(bar)
+
+    def _arrange_bars(self):
+        """
+        Resize and arrange the bars, stacking them along the specified direction.
+        """
+        prev: Rectangle | None = None
+        for i, value in enumerate(self.values):
+            bar = self.bars[i]
+
+            # Scale the actual value to the length
+            bar_length = max(
+                (value / self.max_value) * self.bar_length, StackedBar.min_bar_size
+            )
+
+            if self.is_vertical:
+                bar.stretch_to_fit_height(bar_length, about_edge=-self.direction)
+            else:
+                bar.stretch_to_fit_width(bar_length, about_edge=-self.direction)
+
+            if prev is not None:
+                # Position the bar relative to the previous one
+                bar.next_to(
+                    prev,
+                    self.direction,
+                    buff=stroke_width_buffer(prev, overlap=True),
+                )
+
+            prev = bar
+
+
+class MovingAverageTracker(ValueTracker):
+    def __init__(self, window_size: int = 10, **kwargs):
+        super().__init__(0, **kwargs)
+        self.window_size = window_size
+        self.values: collections.deque[float] = collections.deque(maxlen=window_size)
+
+    def add_value(self, value: float):
+        self.values.append(value)
+        self.set_value(statistics.fmean(self.values))
 
 
 class ClientServerTest(Scene):
@@ -502,27 +665,84 @@ class ClientServerTest(Scene):
         )
         self.wait(0.3)
 
-        client.add_client_connection(conn)
+        avg_req_concurrency = MovingAverageTracker(window_size=30)
+        avg_retry_concurrency = MovingAverageTracker(window_size=30)
+        server.add_updater(
+            lambda m: avg_req_concurrency.add_value(
+                m.concurrency_by_type().get(MessageType.REQUEST, 0)
+            )
+        )
+        server.add_updater(
+            lambda m: avg_retry_concurrency.add_value(
+                m.concurrency_by_type().get(MessageType.RETRY_REQUEST, 0)
+            )
+        )
+        concurrency_bar = StackedBar(
+            max_value=5,
+            values=[
+                avg_req_concurrency.get_value(),
+                avg_retry_concurrency.get_value(),
+            ],
+            colors=[MessageType.REQUEST.color(), MessageType.RETRY_REQUEST.color()],
+            bar_length=server.height,
+            bar_width=server.height / 10,
+        ).next_to(
+            server,
+            RIGHT,
+            buff=stroke_width_buffer(server),
+            aligned_edge=DOWN,
+        )
 
+        concurrency_bar.add_updater(
+            lambda m: m.set_values(
+                [
+                    avg_req_concurrency.get_value(),
+                    avg_retry_concurrency.get_value(),
+                ]
+            )
+        )
+        concurrency_label = create_label(
+            server,
+            lambda m: avg_req_concurrency.get_value()
+            + avg_retry_concurrency.get_value(),
+            "concurrency",
+            direction=RIGHT,
+            buff=0.2 + concurrency_bar.bar_width,
+        ).shift(UP * 0.2)
+        self.play(
+            FadeIn(concurrency_bar),
+            Write(concurrency_label),
+            run_time=0.6,
+        )
+        self.wait(0.3)
+
+        client.add_client_connection(conn)
         self.wait(5)
+
+        failure_label = create_label(
+            server, lambda m: getattr(m, "failure_rate"), "failure_rate"
+        )
+        failure_label.next_to(concurrency_label, DOWN, buff=0.2)
+        self.play(Write(failure_label))
+        self.wait(1)
 
         failure_rate = ValueTracker(0)
         server.add_updater(lambda m: m.set(failure_rate=failure_rate.get_value()))
-        label = create_label(server, "failure_rate")
-        self.play(Write(label), run_time=1)
-
-        self.wait(1)
 
         self.play(failure_rate.animate.set_value(0.8), run_time=5.0, rate_func=linear)
-
         self.wait(5)
 
         self.play(failure_rate.animate.set_value(0), run_time=5.0, rate_func=linear)
-
         self.wait(2)
 
         client.set(req_rate=0.0)
-
         self.wait(2)
 
-        self.play(FadeOut(client), FadeOut(server), FadeOut(conn), FadeOut(label))
+        self.play(
+            FadeOut(client),
+            FadeOut(server),
+            FadeOut(conn),
+            FadeOut(concurrency_label),
+            FadeOut(failure_label),
+            FadeOut(concurrency_bar),
+        )
