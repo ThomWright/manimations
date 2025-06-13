@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-from collections import deque, defaultdict
 import heapq
+import math
 import statistics
+from collections import defaultdict, deque
 from enum import Enum
 from typing import Callable, TypeVar, cast
-
 
 import numpy as np
 from manim import (
@@ -30,6 +30,7 @@ from manim import (
     Rectangle,
     Scene,
     Square,
+    TracedPath,
     ValueTracker,
     Variable,
     VGroup,
@@ -55,14 +56,15 @@ STROKE_WIDTH_CONVERSION = 0.01
 """Conversion factor for stroke width to Manim units."""
 
 
-def stroke_width_buffer(mob: VMobject, overlap=False) -> float:
+def stroke_width_buffer(mob1: VMobject, mob2: VMobject) -> float:
     """
     Returns the buffer to use when positioning objects relative to the stroke width of the given
-    Mobject.
+    Mobjects.
     """
-    return STROKE_WIDTH_CONVERSION * mob.stroke_width - (
-        STROKE_WIDTH_CONVERSION if overlap else 0
-    )
+    return (
+        STROKE_WIDTH_CONVERSION * mob1.stroke_width
+        + STROKE_WIDTH_CONVERSION * mob2.stroke_width
+    ) / 2
 
 
 def tex_escape_underscores(s: str) -> str:
@@ -295,13 +297,13 @@ class Processor(VGroup):
         square = Square(side_length=1.5 * size, color=BLUE, fill_opacity=0.2, **kwargs)
         self.add(square)
 
+        self.time = 0.0
+
+        # Client
         self.req_rate = req_rate
         self.retry_policy = retry_policy
-        self.failure_rate = failure_rate
-        self.max_concurrency = max_concurrency
-
-        self.client_connections: list[Connection] = []
-        """Connections for which this processor is a client."""
+        self.client_connections: list[tuple[Connection, int]] = []
+        """Connections for which this processor is a client, with number of messages in flight."""
 
         self.retries: dict[Connection, list[tuple[float, Message]]] = defaultdict(list)
         """Messages which failed and are waiting to be retried."""
@@ -309,15 +311,9 @@ class Processor(VGroup):
         self.unused_msgs: list[Message] = []
         """Messages which are not currently in use, ready for recycling."""
 
-        self.time = 0.0
-
-        def update(m: Mobject, dt: float):
-            self.time += dt
-            self._generate_requests(dt)
-            self._process_responses()
-
-        self.add_updater(update)
-
+        # Server
+        self.failure_rate = failure_rate
+        self.max_concurrency = max_concurrency
         self.processing: dict[Connection, list[tuple[float, Message]]] = defaultdict(
             list
         )
@@ -329,6 +325,25 @@ class Processor(VGroup):
         """
         Messages which are queued up to be processed by this processor.
         """
+
+    def _update(self, m: Mobject, dt: float):
+        if dt <= 0:
+            return
+        self.time += dt
+        self._generate_requests(dt)
+        self._process_responses()
+
+    def start(self):
+        """
+        Start the processor, allowing it to generate requests and process messages.
+        """
+        self.add_updater(self._update)
+
+    def stop(self):
+        """
+        Stop the processor, preventing it from generating requests and processing messages.
+        """
+        self.remove_updater(self._update)
 
     # Client
     @staticmethod
@@ -367,12 +382,14 @@ class Processor(VGroup):
             self._queued_by_type(concurrency)
         return concurrency
 
+    # Server
     def queued(self) -> int:
         """
         Returns the number of messages currently queued for processing.
         """
         return len(self.processing_queue)
 
+    # Server
     def queued_by_type(self) -> dict[MessageType, int]:
         """
         Returns the number of messages currently queued for processing, grouped by message type.
@@ -380,6 +397,7 @@ class Processor(VGroup):
         queued = defaultdict(int)
         return self._queued_by_type(queued)
 
+    # Server
     def _queued_by_type(self, queued: dict[MessageType, int]) -> dict[MessageType, int]:
         for _, msg in self.processing_queue:
             queued[msg.type] += 1
@@ -390,11 +408,19 @@ class Processor(VGroup):
         """
         Add a connection for which this processor is a client.
         """
-        self.client_connections.append(conn)
+        self.client_connections.append((conn, 0))
+
+    # Client
+    def messages_in_flight(self) -> int:
+        """
+        Returns the total number of messages in flight for this processor.
+        This includes both requests sent and responses received.
+        """
+        return sum(msgs_in_flight for _, msgs_in_flight in self.client_connections)
 
     # Client
     def _generate_requests(self, dt: float):
-        for conn in self.client_connections:
+        for i, (conn, msgs_in_flight) in enumerate(self.client_connections):
             n = Processor._num_new_reqs(dt, self.req_rate)
 
             msgs: list[Message] = []
@@ -419,11 +445,13 @@ class Processor(VGroup):
                 else:
                     break
 
+            # Update the count of messages in flight
+            self.client_connections[i] = (conn, msgs_in_flight + len(msgs))
             conn.send_requests(msgs, dt)
 
     # Client
     def _process_responses(self):
-        for conn in self.client_connections:
+        for i, (conn, msgs_in_flight) in enumerate(self.client_connections):
             resps = conn.ready_responses()
 
             for msg in resps:
@@ -431,6 +459,9 @@ class Processor(VGroup):
                     continue
 
                 self._return_message_to_pool(msg)
+
+            # Update the count of messages in flight
+            self.client_connections[i] = (conn, msgs_in_flight - len(resps))
 
     # Client
     def _try_schedule_retry(self, msg: Message, conn: Connection) -> bool:
@@ -693,13 +724,123 @@ class StackedBar(VGroup):
 
             if prev is not None:
                 # Position the bar relative to the previous one
-                bar.next_to(
-                    prev,
-                    self.direction,
-                    buff=stroke_width_buffer(prev, overlap=True),
-                )
+                bar.next_to(prev, self.direction, buff=0)
             if value != 0:
                 prev = bar
+
+
+class Sparkline(VMobject):
+    """A sparkline that traces a function over time."""
+
+    def __init__(
+        self,
+        get_value: Callable[[], float],
+        width: float = 1.0,
+        height: float = 0.5,
+        start_y_bounds: tuple[float, float] = (-1, 1),
+        dissipating_time: float = 1,
+        stroke_color: ManimColor = BLUE,
+        stroke_width: float = 2.0,
+        dot_radius: float = 0.05,
+        **kwargs,
+    ):
+        super().__init__(
+            stroke_color=stroke_color,
+            stroke_width=stroke_width,
+            **kwargs,
+        )
+        self.get_value = get_value
+        self.sl_width = width
+        self.sl_height = height
+        self.y_bounds = start_y_bounds
+        self.dissipating_time = dissipating_time
+
+        self.bounding_rect = Rectangle(
+            width=self.sl_width,
+            height=self.sl_height,
+            stroke_opacity=0,
+        )
+        self.add(self.bounding_rect)
+
+        self.dot = Dot(
+            radius=dot_radius,
+            color=stroke_color,
+            fill_opacity=1.0,
+            stroke_opacity=0.0,
+        ).shift(RIGHT * (self.sl_width / 2))
+        self.add(self.dot)
+
+        self.update_dot_position()
+
+        self.line = TracedPath(
+            self.dot.get_center,
+            stroke_color=stroke_color,
+            stroke_width=stroke_width,
+            dissipating_time=dissipating_time,
+            stroke_opacity=[1, 0],  # type: ignore
+        )
+        self.line.remove_updater(self.line.update_path)
+        self.line.start_new_path(self.dot.get_center())  # Initialize the path
+        self.add(self.line)
+
+    def _update(self, mob: Mobject, dt: float):
+        if dt <= 0:
+            return
+
+        x_shift = self._x_shift(dt)
+        self.line.shift(LEFT * x_shift)
+
+        self.update_dot_position()
+        self.line.update_path(self.line, dt)
+
+    def update_dot_position(self):
+        value = self.get_value()
+        self._adjust_y_bounds(value)
+
+        new_point = self._new_point(value)
+        self.dot.move_to(new_point)
+
+    def start(self):
+        """
+        Start the sparkline, allowing it to update its position and trace the function.
+        """
+        self.add_updater(self._update)
+
+    def stop(self):
+        """
+        Stop the sparkline, preventing it from updating its position and tracing the function.
+        """
+        self.remove_updater(self._update)
+
+    def _x_shift(self, dt: float) -> float:
+        """
+        Calculate the how much the x axis should be shifted.
+        """
+        shifts_per_dissipation_time = math.floor(self.dissipating_time / dt)
+        return self.sl_width / shifts_per_dissipation_time
+
+    def _adjust_y_bounds(self, value: float):
+        """
+        Adjust the y bounds based on the new value.
+        """
+        if value < self.y_bounds[0]:
+            self.y_bounds = (value, self.y_bounds[1])
+        elif value > self.y_bounds[1]:
+            self.y_bounds = (self.y_bounds[0], value)
+
+    def _new_point(self, value: float) -> Vector3D:
+        """
+        Create a new point for the sparkline based on the current time and value.
+        """
+        x: float = self.bounding_rect.get_right()[X_DIM]
+
+        # Scale the y value to fit within the height of the sparkline
+        y = (
+            (value - self.y_bounds[0])
+            / (self.y_bounds[1] - self.y_bounds[0])
+            * self.sl_height
+        ) + self.bounding_rect.get_bottom()[Y_DIM]
+        return np.array([x, y, 0])
 
 
 class MovingAverageTracker(ValueTracker):
@@ -727,6 +868,7 @@ class ClientServerTest(Scene):
         self.wait(0.3)
 
         conn = Connection(client.get_right(), server.get_left(), server)
+        client.add_client_connection(conn)
 
         self.play(
             Write(conn, run_time=0.3),
@@ -775,10 +917,11 @@ class ClientServerTest(Scene):
             ],
             bar_length=server.height,
             bar_width=server.height / 10,
-        ).next_to(
+        )
+        concurrency_bar.next_to(
             server,
             RIGHT,
-            buff=stroke_width_buffer(server),
+            buff=stroke_width_buffer(server, concurrency_bar),
             aligned_edge=DOWN,
         )
         concurrency_bar.add_updater(
@@ -806,15 +949,30 @@ class ClientServerTest(Scene):
             + avg_queued_retry_concurrency.get_value(),
             "queueing",
         ).next_to(concurrency_label, DOWN, buff=0.2, aligned_edge=RIGHT)
+        concurrency_sparkline = Sparkline(
+            get_value=lambda: avg_req_concurrency.get_value()
+            + avg_retry_concurrency.get_value(),
+            width=concurrency_label.height * 6,
+            height=concurrency_label.height * 2,
+            start_y_bounds=(0, server.max_concurrency),
+            stroke_color=MessageType.REQUEST.color(),
+        ).next_to(
+            concurrency_label,
+            RIGHT,
+            buff=0.2,
+        )
         self.play(
             FadeIn(concurrency_bar),
             Write(concurrency_label),
+            FadeIn(concurrency_sparkline),
             Write(queueing_label),
             run_time=0.6,
         )
         self.wait(0.3)
 
-        client.add_client_connection(conn)
+        client.start()
+        server.start()
+        concurrency_sparkline.start()
         self.wait(5)
 
         failure_label = create_label(
@@ -833,7 +991,12 @@ class ClientServerTest(Scene):
         self.wait(2)
 
         client.set(req_rate=0.0)
-        self.wait(2)
+        self.wait(10, stop_condition=lambda: client.messages_in_flight() == 0)
+
+        # Stop the processors and sparkline
+        client.stop()
+        server.stop()
+        concurrency_sparkline.stop()
 
         self.play(
             FadeOut(client),
@@ -841,6 +1004,7 @@ class ClientServerTest(Scene):
             FadeOut(conn),
             FadeOut(concurrency_label),
             FadeOut(queueing_label),
+            FadeOut(concurrency_sparkline),
             FadeOut(failure_label),
             FadeOut(concurrency_bar),
         )

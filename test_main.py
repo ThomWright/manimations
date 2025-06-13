@@ -1,12 +1,7 @@
 import pytest
 from manim import DOWN, LEFT, RIGHT, UP
 
-from main import (
-    Processor,
-    Queue,
-    RetryPolicy,
-    tex_escape_underscores,
-)
+from main import Processor, Queue, RetryPolicy, Sparkline, tex_escape_underscores, X_DIM
 
 
 class TestQueue:
@@ -93,4 +88,26 @@ class TestTexEscapeUnderscores:
         ), "Should escape multiple underscores in TeX"
         assert tex_escape_underscores("") == "", (
             "Should return empty string for empty input"
+        )
+
+
+class TestSparkline:
+    def test_sparkline(self):
+        dt = 0.06666666666666665
+        dissipating_time = 0.5
+
+        width = 2.0
+        sparkline = Sparkline(
+            lambda: 0.5, width=width, height=1.0, dissipating_time=dissipating_time
+        )
+
+        total_time = 0.0
+        while total_time < dissipating_time:
+            sparkline._update(sparkline, dt)
+            total_time += dt
+
+        line_width = sparkline.line.length_over_dim(X_DIM)
+
+        assert line_width == pytest.approx(width, rel=0.01), (
+            "Sparkline width should be approximately equal to the specified width after dissipating time"
         )
