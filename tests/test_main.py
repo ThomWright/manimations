@@ -1,7 +1,11 @@
 import pytest
 from manim import DOWN, LEFT, RIGHT, UP
 
-from main import Processor, Queue, RetryPolicy, Sparkline, tex_escape_underscores, X_DIM
+from components.processor import Processor, RetryPolicy
+from components.queue import Queue
+from components.sparkline import Sparkline
+from constants import X_DIM
+from components.label import tex_escape_underscores
 
 
 class TestQueue:
@@ -96,10 +100,7 @@ class TestSparkline:
         dt = 0.06666666666666665
         dissipating_time = 0.5
 
-        width = 2.0
-        sparkline = Sparkline(
-            lambda: 0.5, width=width, height=1.0, dissipating_time=dissipating_time
-        )
+        sparkline = Sparkline(lambda: 0.5, size=2, dissipating_time=dissipating_time)
 
         total_time = 0.0
         while total_time < dissipating_time:
@@ -108,6 +109,6 @@ class TestSparkline:
 
         line_width = sparkline.line.length_over_dim(X_DIM)
 
-        assert line_width == pytest.approx(width, rel=0.01), (
+        assert line_width == pytest.approx(sparkline.sl_width, rel=0.01), (
             "Sparkline width should be approximately equal to the specified width after dissipating time"
         )
