@@ -74,6 +74,9 @@ def tex_escape_underscores(s: str) -> str:
     return s.replace("_", "{\\_}")
 
 
+QUEUEING_COLOR = ORANGE
+
+
 class MessageType(Enum):
     REQUEST = "request"
     RETRY_REQUEST = "retry_request"
@@ -117,6 +120,7 @@ class Message(Dot):
         self.id = np.random.randint(0, 1000000)
         self.type = type
         self.attempt = 1
+        self.failure = False
 
         self.offset = 0
         """Scalar offset perpendicular to the line of flight."""
@@ -130,25 +134,41 @@ class Message(Dot):
     def hide(self):
         self.set_opacity(0.0)
 
+    def unhide(self):
+        self.set_opacity(0.8)
+        self.time_alive = 0.0
+
+    def reset(self):
+        self.attempt = 1
+        self.failure = False
+        self.time_alive = 0.0
+        self.set_type(MessageType.REQUEST)
+
+    def set_as_response(self):
+        if self.failure:
+            self.set_type(MessageType.FAILURE_RESPONSE)
+        else:
+            self.set_type(MessageType.RESPONSE)
+
     def set_type(self, type: MessageType):
         """
         Set the type of the message and update its color accordingly.
         """
         self.type = type
         self.set_color(type.color())
-        self.set_opacity(0.8)
-        self._reset_time_alive()
         if type == MessageType.REQUEST:
             self.offset = np.random.uniform(0.2, 1)
-            self.attempt = 1
         elif type == MessageType.RETRY_REQUEST:
             self.offset = abs(self.offset)
             self.attempt += 1
         elif type.is_response():
             self.offset = -self.offset
 
-    def _reset_time_alive(self):
-        self.time_alive = 0.0
+    def __lt__(self, other: Message) -> bool:
+        return self.id < other.id
+
+    def __le__(self, other: Message) -> bool:
+        return self.id <= other.id
 
 
 class Queue(Rectangle):
@@ -264,7 +284,6 @@ class Connection(VGroup):
                 if is_request:
                     self.server.process(msg, self)
                 else:
-                    msg.hide()
                     self.ready_msgs.append(msg)
             else:
                 self._move_msg_along_line(
@@ -290,6 +309,7 @@ class Processor(VGroup):
         failure_rate: float = 0.0,
         size: float = MEDIUM,
         max_concurrency: int = 10,
+        max_queue_size: int = 10,
         **kwargs,
     ):
         super().__init__()
@@ -314,11 +334,16 @@ class Processor(VGroup):
         # Server
         self.failure_rate = failure_rate
         self.max_concurrency = max_concurrency
+        self.max_queue_size = max_queue_size
         self.processing: dict[Connection, list[tuple[float, Message]]] = defaultdict(
             list
         )
         """
         Messages currently being processed by this processor, along with their finish time.
+        """
+        self.rejections: dict[Connection, list[Message]] = defaultdict(list)
+        """
+        Messages rejected to be instantly returned.
         """
 
         self.processing_queue: deque[tuple[Connection, Message]] = deque()
@@ -371,7 +396,7 @@ class Processor(VGroup):
         self, include_queued: bool = True
     ) -> dict[MessageType, int]:
         """
-        Returns the number of concurrent requests being processed (or queued for processsing) by
+        Returns the number of concurrent requests being processed (or queued for processing) by
         this processor, grouped by message type.
         """
         concurrency = defaultdict(int)
@@ -424,23 +449,26 @@ class Processor(VGroup):
             n = Processor._num_new_reqs(dt, self.req_rate)
 
             msgs: list[Message] = []
-            for _ in range(n):
-                if len(self.unused_msgs) > 0:
-                    # Recycle message object
-                    req = self.unused_msgs.pop()
-                    req.set_type(MessageType.REQUEST)
-                    msgs.append(req)
-                else:
-                    # Create a new message object
-                    req = Message(size=SMALL)
-                    req.set_type(MessageType.REQUEST)
-                    msgs.append(req)
 
+            # New messages
+            for _ in range(n):
+                req = (
+                    # Try to recycle message object
+                    self.unused_msgs.pop()
+                    if len(self.unused_msgs) > 0
+                    else Message(size=SMALL)
+                )
+                req.reset()
+                req.unhide()
+                msgs.append(req)
+
+            # Retries
             while len(self.retries[conn]) > 0:
                 retry_at, msg = self.retries[conn][0]
                 if self.time >= retry_at:
                     heapq.heappop(self.retries[conn])
                     msg.set_type(MessageType.RETRY_REQUEST)
+                    msg.unhide()
                     msgs.append(msg)
                 else:
                     break
@@ -455,6 +483,8 @@ class Processor(VGroup):
             resps = conn.ready_responses()
 
             for msg in resps:
+                msg.hide()
+
                 if self._try_schedule_retry(msg, conn):
                     continue
 
@@ -470,7 +500,7 @@ class Processor(VGroup):
 
         Returns True if the message was scheduled for retry, False otherwise.
         """
-        if msg.type.is_failure() is False or self.retry_policy is None:
+        if not msg.failure or self.retry_policy is None:
             return False
 
         retry_interval = self.retry_policy.get_retry_interval(msg.attempt)
@@ -485,7 +515,6 @@ class Processor(VGroup):
         """
         Return a message to the unused message pool by hiding it and making it available for reuse.
         """
-        msg.hide()
         self.unused_msgs.append(msg)
 
     # Server
@@ -496,18 +525,34 @@ class Processor(VGroup):
         msg.hide()
 
         if self.concurrency(include_queued=False) >= self.max_concurrency:
-            # If we are at max concurrency, queue the message for later processing
-            self.processing_queue.append((return_to, msg))
+            # If we are at max concurrency, try queueing the message for later processing
+            if len(self.processing_queue) >= self.max_queue_size:
+                # Reject the message
+                self._reject(msg, return_to)
+            else:
+                self.processing_queue.append((return_to, msg))
             return
 
         self._process(msg, return_to)
 
     # Server
-    def _process(self, msg: Message, return_to: Connection):
+    def _process(
+        self,
+        msg: Message,
+        return_to: Connection,
+    ):
         finished_at = self.time + Processor._processing_latency()
+
+        msg.failure = np.random.uniform() < self.failure_rate
 
         conn: list[tuple[float, Message]] = self.processing[return_to]
         heapq.heappush(conn, (finished_at, msg))
+
+    def _reject(self, msg: Message, return_to: Connection):
+        """
+        Reject the message by scheduling it to instantly return to the connection as a failure.
+        """
+        self.rejections[return_to].append(msg)
 
     # Server
     def send_responses(self, conn: Connection) -> list[Message]:
@@ -520,10 +565,10 @@ class Processor(VGroup):
             finished_at, msg = self.processing[conn][0]
             if self.time >= finished_at:
                 heapq.heappop(self.processing[conn])
-                if np.random.uniform() < self.failure_rate:
-                    msg.set_type(MessageType.FAILURE_RESPONSE)
-                else:
-                    msg.set_type(MessageType.RESPONSE)
+
+                msg.unhide()
+                msg.set_as_response()
+
                 responses.append(msg)
 
                 # If there are messages in the processing queue, start processing the next one
@@ -532,6 +577,13 @@ class Processor(VGroup):
                     self._process(msg, conn)
             else:
                 break
+
+        # Handle any rejections
+        while len(self.rejections[conn]) > 0:
+            msg = self.rejections[conn].pop(0)
+            msg.unhide()
+            msg.set_as_response()
+            responses.append(msg)
 
         return responses
 
@@ -735,8 +787,7 @@ class Sparkline(VMobject):
     def __init__(
         self,
         get_value: Callable[[], float],
-        width: float = 1.0,
-        height: float = 0.5,
+        size: float = MEDIUM,
         start_y_bounds: tuple[float, float] = (-1, 1),
         dissipating_time: float = 1,
         stroke_color: ManimColor = BLUE,
@@ -749,9 +800,10 @@ class Sparkline(VMobject):
             stroke_width=stroke_width,
             **kwargs,
         )
+        size = size * 0.6
         self.get_value = get_value
-        self.sl_width = width
-        self.sl_height = height
+        self.sl_width = size * 3.0
+        self.sl_height = size
         self.y_bounds = start_y_bounds
         self.dissipating_time = dissipating_time
 
@@ -877,8 +929,8 @@ class ClientServerTest(Scene):
 
         avg_req_concurrency = MovingAverageTracker(window_size=30)
         avg_retry_concurrency = MovingAverageTracker(window_size=30)
-        avg_queued_req_concurrency = MovingAverageTracker(window_size=30)
-        avg_queued_retry_concurrency = MovingAverageTracker(window_size=30)
+        avg_queued_concurrency = MovingAverageTracker(window_size=30)
+
         server.add_updater(
             lambda m: avg_req_concurrency.add_value(
                 m.concurrency_by_type(include_queued=False).get(MessageType.REQUEST, 0)
@@ -891,29 +943,19 @@ class ClientServerTest(Scene):
                 )
             )
         )
-        server.add_updater(
-            lambda m: avg_queued_req_concurrency.add_value(
-                m.queued_by_type().get(MessageType.REQUEST, 0)
-            )
-        )
-        server.add_updater(
-            lambda m: avg_queued_retry_concurrency.add_value(
-                m.queued_by_type().get(MessageType.RETRY_REQUEST, 0)
-            )
-        )
+        server.add_updater(lambda m: avg_queued_concurrency.add_value(m.queued()))
+
         concurrency_bar = StackedBar(
             max_value=server.max_concurrency,
             values=[
                 avg_req_concurrency.get_value(),
                 avg_retry_concurrency.get_value(),
-                avg_queued_req_concurrency.get_value(),
-                avg_queued_retry_concurrency.get_value(),
+                avg_queued_concurrency.get_value(),
             ],
             colors=[
                 MessageType.REQUEST.color(),
                 MessageType.RETRY_REQUEST.color(),
-                ORANGE,
-                RED,
+                QUEUEING_COLOR,
             ],
             bar_length=server.height,
             bar_width=server.height / 10,
@@ -929,8 +971,7 @@ class ClientServerTest(Scene):
                 [
                     avg_req_concurrency.get_value(),
                     avg_retry_concurrency.get_value(),
-                    avg_queued_req_concurrency.get_value(),
-                    avg_queued_retry_concurrency.get_value(),
+                    avg_queued_concurrency.get_value(),
                 ]
             )
         )
@@ -942,22 +983,31 @@ class ClientServerTest(Scene):
             direction=RIGHT,
             buff=0.2 + concurrency_bar.bar_width,
         ).shift(UP * 0.2)
-        # TODO: add label for queued messages
-        queueing_label = create_label(
-            server,
-            lambda m: avg_queued_req_concurrency.get_value()
-            + avg_queued_retry_concurrency.get_value(),
-            "queueing",
-        ).next_to(concurrency_label, DOWN, buff=0.2, aligned_edge=RIGHT)
         concurrency_sparkline = Sparkline(
             get_value=lambda: avg_req_concurrency.get_value()
             + avg_retry_concurrency.get_value(),
-            width=concurrency_label.height * 6,
-            height=concurrency_label.height * 2,
             start_y_bounds=(0, server.max_concurrency),
             stroke_color=MessageType.REQUEST.color(),
+            size=SMALL,
         ).next_to(
             concurrency_label,
+            RIGHT,
+            buff=0.2,
+        )
+        queueing_label = create_label(
+            server,
+            lambda m: avg_queued_concurrency.get_value(),
+            # + avg_queued_retry_concurrency.get_value(),
+            "queueing",
+        ).next_to(concurrency_label, DOWN, buff=0.2, aligned_edge=RIGHT)
+        queueing_sparkline = Sparkline(
+            get_value=lambda: avg_queued_concurrency.get_value(),
+            # + avg_queued_retry_concurrency.get_value(),
+            start_y_bounds=(0, server.max_queue_size),
+            stroke_color=QUEUEING_COLOR,
+            size=SMALL,
+        ).next_to(
+            queueing_label,
             RIGHT,
             buff=0.2,
         )
@@ -966,6 +1016,7 @@ class ClientServerTest(Scene):
             Write(concurrency_label),
             FadeIn(concurrency_sparkline),
             Write(queueing_label),
+            FadeIn(queueing_sparkline),
             run_time=0.6,
         )
         self.wait(0.3)
@@ -973,6 +1024,7 @@ class ClientServerTest(Scene):
         client.start()
         server.start()
         concurrency_sparkline.start()
+        queueing_sparkline.start()
         self.wait(5)
 
         failure_label = create_label(
@@ -1000,11 +1052,12 @@ class ClientServerTest(Scene):
 
         self.play(
             FadeOut(client),
-            FadeOut(server),
             FadeOut(conn),
-            FadeOut(concurrency_label),
-            FadeOut(queueing_label),
-            FadeOut(concurrency_sparkline),
-            FadeOut(failure_label),
+            FadeOut(server),
             FadeOut(concurrency_bar),
+            FadeOut(concurrency_label),
+            FadeOut(concurrency_sparkline),
+            FadeOut(queueing_label),
+            FadeOut(queueing_sparkline),
+            FadeOut(failure_label),
         )
