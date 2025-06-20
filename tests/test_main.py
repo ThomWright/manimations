@@ -48,10 +48,12 @@ class TestClient:
         req_rate = 2.0
         dt = 0.06666666666666665
 
+        processor = Processor(req_rate=req_rate)
+
         reqs = 0
         time = 0.0
         while time < 10.0:
-            reqs += Processor._num_new_reqs(dt, req_rate)
+            reqs += processor._num_new_reqs(dt)
             time += dt
 
         # Check that we get approximately 20 requests (20 = 2.0 requests/sec * 10 seconds)

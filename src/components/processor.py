@@ -7,8 +7,9 @@ from typing import TYPE_CHECKING
 import numpy as np
 from manim import BLUE, Mobject, Square, VGroup
 
-from constants import MEDIUM, SMALL
+from aggregators.moving_sum import MovingSum
 from components.message import Message, MessageType
+from constants import MEDIUM, SMALL
 
 if TYPE_CHECKING:
     from .connection import Connection
@@ -61,7 +62,10 @@ class Processor(VGroup):
         self.time = 0.0
 
         # Client
-        self.req_rate = req_rate
+        self.gen_req_rate = req_rate
+        """Number of requests generated per second (on average) per connection."""
+        self.actual_req_rate: dict[Connection, MovingSum] = defaultdict(MovingSum)
+        """Number of requests sent in the last second, including retries."""
         self.retry_policy = retry_policy
         self.client_connections: list[tuple[Connection, int]] = []
         """Connections for which this processor is a client, with number of messages in flight."""
@@ -75,7 +79,6 @@ class Processor(VGroup):
         # Server
         self.failure_rate = failure_rate
         self.max_concurrency = max_concurrency
-        self.max_queue_size = max_queue_size
         self.processing: dict[Connection, list[tuple[float, Message]]] = defaultdict(
             list
         )
@@ -87,6 +90,7 @@ class Processor(VGroup):
         Messages rejected to be instantly returned.
         """
 
+        self.max_queue_size = max_queue_size
         self.processing_queue: deque[tuple[Connection, Message]] = deque()
         """
         Messages which are queued up to be processed by this processor.
@@ -112,16 +116,28 @@ class Processor(VGroup):
         self.remove_updater(self._update)
 
     # Client
-    @staticmethod
-    def _num_new_reqs(dt: float, req_rate: float) -> int:
+    def _num_new_reqs(self, dt: float) -> int:
         """
         Returns the number of new requests which would have been created in the given period and
         request rate.
         """
         # Number of requests created per dt
-        lam = req_rate * dt
+        lam = self.gen_req_rate * dt
 
         return np.random.poisson(lam)
+
+    # Client
+    def gen_rps(self) -> float:
+        """
+        Returns the currently set request rate per second for this processor.
+        """
+        return self.gen_req_rate
+
+    def actual_rps(self, conn: Connection) -> float:
+        """
+        Returns the actual request rate per second for the given connection, including retries.
+        """
+        return self.actual_req_rate[conn].get_value()
 
     # Server
     def concurrency(self, include_queued: bool = True) -> int:
@@ -187,7 +203,9 @@ class Processor(VGroup):
     # Client
     def _generate_requests(self, dt: float):
         for i, (conn, msgs_in_flight) in enumerate(self.client_connections):
-            n = Processor._num_new_reqs(dt, self.req_rate)
+            n = self._num_new_reqs(dt)
+
+            total_reqs = n
 
             msgs: list[Message] = []
 
@@ -208,11 +226,14 @@ class Processor(VGroup):
                 retry_at, msg = self.retries[conn][0]
                 if self.time >= retry_at:
                     heapq.heappop(self.retries[conn])
+                    total_reqs += 1
                     msg.set_type(MessageType.RETRY_REQUEST)
                     msg.unhide()
                     msgs.append(msg)
                 else:
                     break
+
+            self.actual_req_rate[conn].add_value(total_reqs, dt)
 
             # Update the count of messages in flight
             self.client_connections[i] = (conn, msgs_in_flight + len(msgs))
