@@ -47,7 +47,7 @@ class Connection(VGroup):
             req.move_to(self.start)
             self.reqs.add(req)
 
-        self._receive_server_responses()
+        self._receive_server_responses(dt)
         self._update_messages(self.reqs, is_request=True)
         self._update_messages(self.resps, is_request=False)
 
@@ -60,8 +60,8 @@ class Connection(VGroup):
         self.ready_msgs = []
         return ret
 
-    def _receive_server_responses(self):
-        new_resps = self.server.send_responses(self)
+    def _receive_server_responses(self, dt: float):
+        new_resps = self.server.send_responses(self, dt)
         self.resps.add(new_resps)
 
     def _update_messages(self, messages, is_request: bool):

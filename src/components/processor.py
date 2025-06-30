@@ -42,7 +42,7 @@ class RetryPolicy:
             return None
         return self.min_interval * (2 ** (retry_attempt - 1)) * jitter_factor
 
-
+# TODO: Split out client and server?
 class Processor(VGroup):
     def __init__(
         self,
@@ -77,7 +77,10 @@ class Processor(VGroup):
         """Messages which are not currently in use, ready for recycling."""
 
         # Server
-        self.failure_rate = failure_rate
+        self.sim_failure_rate = failure_rate
+        """Simulated failure rate, between 0 and 1."""
+        self.actual_failure_rate: dict[Connection, MovingSum] = defaultdict(MovingSum)
+        """Number of failure responses in the last second"""
         self.max_concurrency = max_concurrency
         self.processing: dict[Connection, list[tuple[float, Message]]] = defaultdict(
             list
@@ -138,6 +141,12 @@ class Processor(VGroup):
         Returns the actual request rate per second for the given connection, including retries.
         """
         return self.actual_req_rate[conn].get_value()
+
+    def failure_rate(self, conn: Connection) -> float:
+        """
+        Returns the real failure rate.
+        """
+        return self.actual_failure_rate[conn].get_value()
 
     # Server
     def concurrency(self, include_queued: bool = True) -> int:
@@ -287,11 +296,12 @@ class Processor(VGroup):
         msg.hide()
 
         if self.concurrency(include_queued=False) >= self.max_concurrency:
-            # If we are at max concurrency, try queueing the message for later processing
+            # If we are at max concurrency...
             if len(self.processing_queue) >= self.max_queue_size:
-                # Reject the message
+                # ...and the queue is full, reject the message
                 self._reject(msg, return_to)
             else:
+                # ... otherwise, try queueing the message for later processing
                 self.processing_queue.append((return_to, msg))
             return
 
@@ -305,7 +315,7 @@ class Processor(VGroup):
     ):
         finished_at = self.time + Processor._processing_latency()
 
-        msg.failure = np.random.uniform() < self.failure_rate
+        msg.failure = np.random.uniform() < self.sim_failure_rate
 
         conn: list[tuple[float, Message]] = self.processing[return_to]
         heapq.heappush(conn, (finished_at, msg))
@@ -317,11 +327,12 @@ class Processor(VGroup):
         self.rejections[return_to].append(msg)
 
     # Server
-    def send_responses(self, conn: Connection) -> list[Message]:
+    def send_responses(self, conn: Connection, dt: float) -> list[Message]:
         """
         Remove and return any pending responses for the given connection.
         """
         responses = []
+        failures = 0
 
         while len(self.processing[conn]) > 0:
             finished_at, msg = self.processing[conn][0]
@@ -330,6 +341,9 @@ class Processor(VGroup):
 
                 msg.unhide()
                 msg.set_as_response()
+
+                if msg.type.is_failure():
+                    failures += 1
 
                 responses.append(msg)
 
@@ -345,7 +359,10 @@ class Processor(VGroup):
             msg = self.rejections[conn].pop(0)
             msg.unhide()
             msg.set_as_response()
+            failures += 1
             responses.append(msg)
+
+        self.actual_failure_rate[conn].add_value(failures, dt)
 
         return responses
 
