@@ -1,12 +1,8 @@
 from __future__ import annotations
 
 from manim import (
-    BLUE,
     DOWN,
-    ORANGE,
-    RED,
     UP,
-    YELLOW,
     ManimColor,
     Rectangle,
     VGroup,
@@ -15,6 +11,7 @@ from manim import (
 from manim.typing import Vector3D
 
 from shared.constants import STROKE_WIDTH_CONVERSION
+from shared.theme import get_theme
 
 
 def stroke_width_buffer(mob1: VMobject, mob2: VMobject) -> float:
@@ -40,7 +37,7 @@ class StackedBar(VGroup):
         self,
         max_value: float,
         values: list[float],
-        colors: list[ManimColor] = [BLUE, YELLOW, ORANGE, RED],
+        colors: list[ManimColor] | None = None,
         bar_length: float = 1.5,
         bar_width: float = 0.3,
         direction: Vector3D = UP,
@@ -49,6 +46,9 @@ class StackedBar(VGroup):
     ):
         super().__init__(**kwargs)
         self.values = values
+        if colors is None:
+            theme = get_theme()
+            colors = [theme.primary, theme.secondary, theme.accent, theme.error]
         self.colors = colors
         self.max_value = max_value
         self.bar_length = max(bar_length, StackedBar.min_bar_size)

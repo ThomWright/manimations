@@ -5,7 +5,9 @@ from collections import defaultdict, deque
 from typing import TYPE_CHECKING
 
 import numpy as np
-from manim import BLUE, Mobject, Square, VGroup
+from manim import Mobject, Square, VGroup
+
+from shared.theme import get_theme
 
 from shared.aggregators.moving_sum import MovingSum
 from shared.constants import MEDIUM, SMALL
@@ -56,7 +58,7 @@ class Processor(VGroup):
     ):
         super().__init__()
 
-        square = Square(side_length=1.5 * size, color=BLUE, fill_opacity=0.2, **kwargs)
+        square = Square(side_length=1.5 * size, color=get_theme().primary, fill_opacity=0.2, **kwargs)
         self.add(square)
 
         self.time = 0.0

@@ -8,25 +8,25 @@ from manim import (
     FadeIn,
     FadeOut,
     Indicate,
-    Scene,
     ValueTracker,
     Write,
     linear,
 )
 
+from shared.themed_scene import ThemedScene
 from shared.aggregators.moving_avg_tracker import MovingAverageTracker
 from shared.components.bar import StackedBar, stroke_width_buffer
 from shared.components.label import create_label
 from shared.components.sparkline import Sparkline
 from shared.constants import SMALL
 from system_design.connection import Connection
-from system_design.constants import QUEUEING_COLOR
+from shared.theme import get_theme
 from system_design.message import Message, MessageType
 from system_design.processor import Processor, RetryPolicy
 from system_design.queue import Queue
 
 
-class MessageQueueTest(Scene):
+class MessageQueueTest(ThemedScene):
     def construct(self):
         queue = Queue().shift(LEFT)
         processor = Processor().shift(RIGHT * 2)
@@ -47,7 +47,7 @@ def immediate(t: float) -> float:
     return 1
 
 
-class ClientServerTest(Scene):
+class ClientServerTest(ThemedScene):
     def construct(self):
         # Introduce client and server
         client = Processor(size=SMALL, retry_policy=RetryPolicy(), req_rate=0.0).shift(
@@ -154,7 +154,7 @@ class ClientServerTest(Scene):
             colors=[
                 MessageType.REQUEST.color(),
                 MessageType.RETRY_REQUEST.color(),
-                QUEUEING_COLOR,
+                get_theme().accent,
             ],
             bar_length=server.height,
             bar_width=server.height / 10,
@@ -201,7 +201,7 @@ class ClientServerTest(Scene):
         queueing_sparkline = Sparkline(
             get_value=lambda: avg_queued_concurrency.get_value(),
             start_y_bounds=(0, server.max_queue_size),
-            stroke_color=QUEUEING_COLOR,
+            stroke_color=get_theme().accent,
             size=SMALL,
         ).next_to(
             queueing_label,

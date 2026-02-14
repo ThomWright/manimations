@@ -3,9 +3,10 @@ from __future__ import annotations
 from enum import Enum
 
 import numpy as np
-from manim import BLUE, GREEN, RED, YELLOW, Dot, ManimColor, Mobject
+from manim import Dot, ManimColor, Mobject
 
 from shared.constants import MEDIUM
+from shared.theme import get_theme
 
 
 class MessageType(Enum):
@@ -15,14 +16,15 @@ class MessageType(Enum):
     FAILURE_RESPONSE = "failure_response"
 
     def color(self) -> ManimColor:
+        theme = get_theme()
         if self == MessageType.REQUEST:
-            return BLUE
+            return theme.primary
         elif self == MessageType.RETRY_REQUEST:
-            return YELLOW
+            return theme.secondary
         elif self == MessageType.RESPONSE:
-            return GREEN
+            return theme.success
         elif self == MessageType.FAILURE_RESPONSE:
-            return RED
+            return theme.error
         else:
             raise ValueError(f"Unknown message type: {self}")
 

@@ -3,7 +3,9 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, cast
 
 import numpy as np
-from manim import DEGREES, LIGHTER_GRAY, Line, VGroup, rotate_vector
+from manim import DEGREES, Line, VGroup, rotate_vector
+
+from shared.theme import get_theme
 from manim.typing import Vector3D
 
 from system_design.message import Message
@@ -27,7 +29,7 @@ class Connection(VGroup):
         self.server = server
         self.rtt = rtt
 
-        self.line = Line(start, end, color=LIGHTER_GRAY, stroke_opacity=0.8)
+        self.line = Line(start, end, color=get_theme().neutral, stroke_opacity=0.8)
         self.reqs = VGroup()
         self.resps = VGroup()
         self.ready_msgs: list[Message] = []

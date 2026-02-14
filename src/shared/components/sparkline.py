@@ -5,7 +5,6 @@ from typing import Callable
 
 import numpy as np
 from manim import (
-    BLUE,
     LEFT,
     RIGHT,
     Dot,
@@ -18,6 +17,7 @@ from manim import (
 from manim.typing import Vector3D
 
 from shared.constants import MEDIUM, X_DIM, Y_DIM
+from shared.theme import get_theme
 
 
 class Sparkline(VMobject):
@@ -29,11 +29,13 @@ class Sparkline(VMobject):
         size: float = MEDIUM,
         start_y_bounds: tuple[float, float] = (-1, 1),
         dissipating_time: float = 1,
-        stroke_color: ManimColor = BLUE,
+        stroke_color: ManimColor | None = None,
         stroke_width: float = 2.0,
         dot_radius: float = 0.05,
         **kwargs,
     ):
+        if stroke_color is None:
+            stroke_color = get_theme().primary
         super().__init__(
             stroke_color=stroke_color,
             stroke_width=stroke_width,

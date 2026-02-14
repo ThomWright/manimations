@@ -5,7 +5,7 @@ Animations built with [Manim](https://www.manim.community/).
 ## Projects
 
 - **system_design** — client/server retries, concurrency, queueing
-- **distributions** — statistical distributions (WIP)
+- **distributions** — statistical distributions
 
 ## Setup
 

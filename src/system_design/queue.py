@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import numpy as np
-from manim import BLUE, DOWN, LEFT, RIGHT, UP, X_AXIS, Rectangle
+from manim import DOWN, LEFT, RIGHT, UP, X_AXIS, Rectangle
+
+from shared.theme import get_theme
 from manim.typing import Vector3D
 
 from system_design.message import Message
@@ -17,7 +19,7 @@ class Queue(Rectangle):
             width = Message.radius_base * 4
             height = 2.0
         super().__init__(
-            width=width, height=height, color=BLUE, fill_opacity=0.2, **kwargs
+            width=width, height=height, color=get_theme().primary, fill_opacity=0.2, **kwargs
         )
 
     def queue_pos_to_point(self, queue_pos: int) -> Vector3D:
