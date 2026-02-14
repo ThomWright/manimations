@@ -30,8 +30,6 @@ from manim import (
 from shared.theme import get_theme
 from shared.themed_scene import ThemedScene
 
-CAP_HEIGHT = 0.15
-
 
 def _poisson_pmf(max_k: int, lam: float) -> np.ndarray:
     """Compute Poisson PMF (probability mass function) for k=0..max_k-1."""
@@ -86,8 +84,12 @@ class PoissonVariance(ThemedScene):
                 fill_opacity=0,
                 stroke_width=0,
             )
-            x_pos = origin[0] + (k + 0.5) * x_scale
-            bar.move_to(np.array([x_pos, origin[1], 0]), aligned_edge=DOWN)
+            if k == 0:
+                bar.stretch_to_fit_width(bar_width / 2)
+                bar.move_to(np.array([origin[0], origin[1], 0]), aligned_edge=DOWN + LEFT)
+            else:
+                x_pos = origin[0] + k * x_scale
+                bar.move_to(np.array([x_pos, origin[1], 0]), aligned_edge=DOWN)
             bars.add(bar)
 
         def update_bars(bars: Mobject) -> None:
@@ -103,8 +105,11 @@ class PoissonVariance(ThemedScene):
                 p = probs[k]
                 height = abs(p * y_scale)
                 bar.stretch_to_fit_height(max(height, 0.001))
-                x_pos = origin[0] + (k + 0.5) * x_scale
-                bar.move_to(np.array([x_pos, origin[1], 0]), aligned_edge=DOWN)
+                if k == 0:
+                    bar.move_to(np.array([origin[0], origin[1], 0]), aligned_edge=DOWN + LEFT)
+                else:
+                    x_pos = origin[0] + k * x_scale
+                    bar.move_to(np.array([x_pos, origin[1], 0]), aligned_edge=DOWN)
 
                 if p < 1e-6:
                     bar.set_fill(opacity=0)
@@ -124,8 +129,6 @@ class PoissonVariance(ThemedScene):
         cv_label = Variable(1.0, r"\sigma / \mu", num_decimal_places=2)
 
         all_labels = [lam_label, var_label, std_label, cv_label]
-        for label in all_labels:
-            label.scale(0.8)
         labels = VGroup(*all_labels).arrange(DOWN, aligned_edge=LEFT, buff=0.15)
 
         # Align the = signs by lining up value left edges
@@ -161,7 +164,7 @@ class PoissonVariance(ThemedScene):
         )
 
         # Animate
-        self.add(axes, bars, labels, spread_indicators)
+        self.add(bars, axes, labels, spread_indicators)
         self.wait(1)
         self.play(
             lam_tracker.animate.set_value(25.0),
@@ -171,10 +174,15 @@ class PoissonVariance(ThemedScene):
         self.wait(2)
 
 
+CAP_HEIGHT = 0.2
+
 def _bar_indicator(left_x: float, right_x: float, y: float, color) -> VGroup:
     """Draw a |----| indicator between two x positions."""
     h_line = Line(
-        np.array([left_x, y, 0]), np.array([right_x, y, 0]), color=color, stroke_width=STROKE_WIDTH
+        np.array([left_x, y, 0]),
+        np.array([right_x, y, 0]),
+        color=color,
+        stroke_width=STROKE_WIDTH,
     )
     l_cap = Line(
         np.array([left_x, y - CAP_HEIGHT / 2, 0]),
@@ -218,7 +226,7 @@ def _spread_indicators(
             y,
             std_dev_color,
         )
-        .shift(DOWN * SMALL_BUFF)
+        .shift(DOWN * SMALL_BUFF * 2)
         .shift(DOWN * MED_SMALL_BUFF)
     )
 
