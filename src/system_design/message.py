@@ -5,7 +5,7 @@ from enum import Enum
 import numpy as np
 from manim import BLUE, GREEN, RED, YELLOW, Dot, ManimColor, Mobject
 
-from constants import MEDIUM
+from shared.constants import MEDIUM
 
 
 class MessageType(Enum):

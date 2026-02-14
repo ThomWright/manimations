@@ -17,7 +17,7 @@ from manim import (
 )
 from manim.typing import Vector3D
 
-from constants import MEDIUM, X_DIM, Y_DIM
+from shared.constants import MEDIUM, X_DIM, Y_DIM
 
 
 class Sparkline(VMobject):

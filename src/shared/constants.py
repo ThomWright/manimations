@@ -1,8 +1,6 @@
 """
-Constants used throughout the manimations project.
+Constants shared across projects.
 """
-
-from manim import ORANGE
 
 # Scaling factors
 MEDIUM = 1
@@ -19,7 +17,3 @@ Y_DIM = 1
 # Manim internals
 STROKE_WIDTH_CONVERSION = 0.01
 """Conversion factor for stroke width to Manim units."""
-
-# Colors
-QUEUEING_COLOR = ORANGE
-"""Color used for queueing-related visualizations."""

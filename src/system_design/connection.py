@@ -6,10 +6,10 @@ import numpy as np
 from manim import DEGREES, LIGHTER_GRAY, Line, VGroup, rotate_vector
 from manim.typing import Vector3D
 
-from components.message import Message
+from system_design.message import Message
 
 if TYPE_CHECKING:
-    from components.processor import Processor
+    from system_design.processor import Processor
 
 
 class Connection(VGroup):

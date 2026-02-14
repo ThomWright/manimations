@@ -14,7 +14,7 @@ from manim import (
 )
 from manim.typing import Vector3D
 
-from constants import STROKE_WIDTH_CONVERSION
+from shared.constants import STROKE_WIDTH_CONVERSION
 
 
 def stroke_width_buffer(mob1: VMobject, mob2: VMobject) -> float:

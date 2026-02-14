@@ -4,7 +4,7 @@ import numpy as np
 from manim import BLUE, DOWN, LEFT, RIGHT, UP, X_AXIS, Rectangle
 from manim.typing import Vector3D
 
-from components.message import Message
+from system_design.message import Message
 
 
 class Queue(Rectangle):

@@ -14,15 +14,16 @@ from manim import (
     linear,
 )
 
-from aggregators.moving_avg_tracker import MovingAverageTracker
-from components.bar import StackedBar, stroke_width_buffer
-from components.connection import Connection
-from components.label import create_label
-from components.message import Message, MessageType
-from components.processor import Processor, RetryPolicy
-from components.queue import Queue
-from components.sparkline import Sparkline
-from constants import QUEUEING_COLOR, SMALL
+from shared.aggregators.moving_avg_tracker import MovingAverageTracker
+from shared.components.bar import StackedBar, stroke_width_buffer
+from shared.components.label import create_label
+from shared.components.sparkline import Sparkline
+from shared.constants import SMALL
+from system_design.connection import Connection
+from system_design.constants import QUEUEING_COLOR
+from system_design.message import Message, MessageType
+from system_design.processor import Processor, RetryPolicy
+from system_design.queue import Queue
 
 
 class MessageQueueTest(Scene):

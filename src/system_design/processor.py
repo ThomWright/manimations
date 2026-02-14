@@ -7,9 +7,9 @@ from typing import TYPE_CHECKING
 import numpy as np
 from manim import BLUE, Mobject, Square, VGroup
 
-from aggregators.moving_sum import MovingSum
-from components.message import Message, MessageType
-from constants import MEDIUM, SMALL
+from shared.aggregators.moving_sum import MovingSum
+from shared.constants import MEDIUM, SMALL
+from system_design.message import Message, MessageType
 
 if TYPE_CHECKING:
     from .connection import Connection
