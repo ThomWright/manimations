@@ -32,8 +32,8 @@ from shared.themed_scene import ThemedScene
 
 
 def _poisson_pmf(max_k: int, lam: float) -> np.ndarray:
-    """Compute Poisson PMF (probability mass function) for k=0..max_k-1."""
-    return stats.poisson.pmf(np.arange(max_k), lam)
+    """Compute Poisson PMF (probability mass function) for k=0..max_k."""
+    return stats.poisson.pmf(np.arange(max_k + 1), lam)
 
 
 MAX_K = 50
