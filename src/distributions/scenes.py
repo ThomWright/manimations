@@ -5,7 +5,6 @@ from typing import cast
 import math
 
 import numpy as np
-import scipy.stats as stats
 from manim import (
     UP,
     DOWN,
@@ -15,11 +14,9 @@ from manim import (
     SMALL_BUFF,
     MED_LARGE_BUFF,
     UR,
-    Axes,
     Line,
     ManimColor,
     Mobject,
-    Rectangle,
     ValueTracker,
     Variable,
     VGroup,
@@ -27,18 +24,13 @@ from manim import (
     linear,
 )
 
+from shared.components.pmf_chart import PoissonPMFChart
 from shared.theme import get_theme
 from shared.themed_scene import ThemedScene
 
 
-def _poisson_pmf(max_k: int, lam: float) -> np.ndarray:
-    """Compute Poisson PMF (probability mass function) for k=0..max_k."""
-    return stats.poisson.pmf(np.arange(max_k + 1), lam)
-
-
 MAX_K = 50
 Y_MAX = 0.40
-DIM_OPACITY = 0.4
 STROKE_WIDTH = 4
 
 
@@ -50,75 +42,30 @@ class PoissonVariance(ThemedScene):
 
         lam_tracker = ValueTracker(1.0)
 
-        # Axes
-        axes = (
-            Axes(
-                x_range=[0, MAX_K, 5],
-                y_range=[0, Y_MAX, 0.1],
+        chart = (
+            PoissonPMFChart(
+                max_k=MAX_K,
+                y_max=Y_MAX,
                 x_length=12.5,
                 y_length=6,
+                bar_color=STD_DEV_COLOR,
                 axis_config={
                     "include_numbers": True,
                     "font_size": 28,
                     "stroke_width": STROKE_WIDTH,
                 },
-                tips=False,
             )
             .shift(UP * MED_LARGE_BUFF)
             .shift(RIGHT * MED_SMALL_BUFF)
         )
 
-        # Pre-compute axis coordinate transform (linear mapping)
-        origin = axes.c2p(0, 0)
-        x_scale = axes.c2p(1, 0)[0] - origin[0]
-        y_scale = axes.c2p(0, 1)[1] - origin[1]
-        bar_width = x_scale * 0.85
-
-        # Pre-allocate bars
-        bars = VGroup()
-        for k in range(MAX_K):
-            bar = Rectangle(
-                width=bar_width,
-                height=0.001,
-                fill_color=STD_DEV_COLOR,
-                fill_opacity=0,
-                stroke_width=0,
-            )
-            if k == 0:
-                bar.stretch_to_fit_width(bar_width / 2)
-                bar.move_to(np.array([origin[0], origin[1], 0]), aligned_edge=DOWN + LEFT)
-            else:
-                x_pos = origin[0] + k * x_scale
-                bar.move_to(np.array([x_pos, origin[1], 0]), aligned_edge=DOWN)
-            bars.add(bar)
-
-        def update_bars(bars: Mobject) -> None:
-            bars = cast(VGroup, bars)
+        def update_chart(mob: Mobject):
+            mob = cast(PoissonPMFChart, mob)
             lam = lam_tracker.get_value()
             sigma = math.sqrt(lam)
-            low = lam - sigma
-            high = lam + sigma
+            mob.set_lambda(lam, highlight_range=(lam - sigma, lam + sigma))
 
-            probs = _poisson_pmf(MAX_K, lam)
-
-            for k, bar in enumerate(bars):
-                p = probs[k]
-                height = abs(p * y_scale)
-                bar.stretch_to_fit_height(max(height, 0.001))
-                if k == 0:
-                    bar.move_to(np.array([origin[0], origin[1], 0]), aligned_edge=DOWN + LEFT)
-                else:
-                    x_pos = origin[0] + k * x_scale
-                    bar.move_to(np.array([x_pos, origin[1], 0]), aligned_edge=DOWN)
-
-                if p < 1e-6:
-                    bar.set_fill(opacity=0)
-                elif low <= k <= high:
-                    bar.set_fill(color=STD_DEV_COLOR, opacity=1)
-                else:
-                    bar.set_fill(color=STD_DEV_COLOR, opacity=DIM_OPACITY)
-
-        bars.add_updater(update_bars)
+        chart.add_updater(update_chart)
 
         # Labels
         lam_label = Variable(1.0, r"\lambda", num_decimal_places=1)
@@ -156,15 +103,17 @@ class PoissonVariance(ThemedScene):
         )
 
         # Spread indicators below x-axis
-        indicators_shift = axes.x_axis.get_bottom()[1] - origin[1] - MED_SMALL_BUFF
+        indicators_shift = (
+            chart.axes.x_axis.get_bottom()[1] - chart.x_to_point(0)[1] - MED_SMALL_BUFF
+        )
         spread_indicators = always_redraw(
             lambda: _spread_indicators(
-                origin, x_scale, lam_tracker, STD_DEV_COLOR, VARIANCE_COLOR
+                chart, lam_tracker, STD_DEV_COLOR, VARIANCE_COLOR
             ).shift(DOWN * abs(indicators_shift))
         )
 
         # Animate
-        self.add(bars, axes, labels, spread_indicators)
+        self.add(chart, labels, spread_indicators)
         self.wait(1)
         self.play(
             lam_tracker.animate.set_value(25.0),
@@ -175,6 +124,7 @@ class PoissonVariance(ThemedScene):
 
 
 CAP_HEIGHT = 0.2
+
 
 def _bar_indicator(left_x: float, right_x: float, y: float, color) -> VGroup:
     """Draw a |----| indicator between two x positions."""
@@ -200,8 +150,7 @@ def _bar_indicator(left_x: float, right_x: float, y: float, color) -> VGroup:
 
 
 def _spread_indicators(
-    origin: np.ndarray,
-    x_scale: float,
+    chart: PoissonPMFChart,
     lam_tracker: ValueTracker,
     std_dev_color: ManimColor,
     variance_color: ManimColor,
@@ -211,18 +160,18 @@ def _spread_indicators(
     sigma = math.sqrt(lam)
     variance = lam
 
-    y = origin[1]
+    y = chart.x_to_point(0)[1]
 
     var_indicator = _bar_indicator(
-        origin[0] + (lam - variance) * x_scale,
-        origin[0] + (lam + variance) * x_scale,
+        chart.x_to_point(lam - variance)[0],
+        chart.x_to_point(lam + variance)[0],
         y,
         variance_color,
     ).shift(DOWN * SMALL_BUFF)
     sigma_indicator = (
         _bar_indicator(
-            origin[0] + (lam - sigma) * x_scale,
-            origin[0] + (lam + sigma) * x_scale,
+            chart.x_to_point(lam - sigma)[0],
+            chart.x_to_point(lam + sigma)[0],
             y,
             std_dev_color,
         )
