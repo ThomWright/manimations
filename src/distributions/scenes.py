@@ -13,7 +13,6 @@ from manim import (
     RIGHT,
     SMALL_BUFF,
     MED_LARGE_BUFF,
-    LARGE_BUFF,
     UR,
     Brace,
     DashedLine,
@@ -57,7 +56,7 @@ class PoissonVariance(ThemedScene):
                 bar_color=STD_DEV_COLOR,
                 axis_config={
                     "include_numbers": True,
-                    "font_size": 28,
+                    "font_size": 36,
                     "stroke_width": STROKE_WIDTH,
                 },
             )
@@ -74,12 +73,15 @@ class PoissonVariance(ThemedScene):
         chart.add_updater(update_chart)
 
         # Labels
-        lam_label = Variable(1.0, r"\lambda", num_decimal_places=1)
-        var_label = Variable(1.0, r"\sigma^2", num_decimal_places=1)
+        label_scale = 60 / 48  # Scale from default (48pt) to target size
+        lam_label = Variable(1.0, r"\lambda", num_decimal_places=1).scale(label_scale)
+        var_label = Variable(1.0, r"\sigma^2", num_decimal_places=1).scale(label_scale)
         var_label.set_color(VARIANCE_COLOR)
-        std_label = Variable(1.0, r"\sigma", num_decimal_places=2)
+        std_label = Variable(1.0, r"\sigma", num_decimal_places=2).scale(label_scale)
         std_label.set_color(STD_DEV_COLOR)
-        cv_label = Variable(1.0, r"\sigma / \mu", num_decimal_places=2)
+        cv_label = Variable(1.0, r"\sigma / \mu", num_decimal_places=2).scale(
+            label_scale
+        )
 
         all_labels = [lam_label, var_label, std_label, cv_label]
         labels = VGroup(*all_labels).arrange(DOWN, aligned_edge=LEFT, buff=SMALL_BUFF)
@@ -193,9 +195,15 @@ class PoissonSum(ThemedScene):
 
     Three independent Poisson(5) distributions sum to Poisson(15).
     Means add linearly, but σ doesn't: 3(μ+σ) > μ_total + σ_total.
+
+    This scene is designed for a 1:1 square aspect ratio. Render with:
+        uv run manim -qm --resolution 720,720 src/distributions/scenes.py PoissonSum
     """
 
     def construct(self):
+        self.camera.frame_width = 9 # type: ignore
+        self.camera.frame_height = 9 # type: ignore
+
         theme = get_theme()
         n = 3
         lam_small = 5
@@ -213,13 +221,13 @@ class PoissonSum(ThemedScene):
             chart = PoissonPMFChart(
                 max_k=15,
                 y_max=0.20,
-                x_length=4,
-                y_length=1.6,
+                x_length=2.2,
+                y_length=2.0,
                 bar_color=theme.primary,
                 axis_config={
                     "include_numbers": True,
                     "stroke_width": 2,
-                    "font_size": 18,
+                    "font_size": 22,
                 },
             )
             chart.set_lambda(
@@ -227,26 +235,29 @@ class PoissonSum(ThemedScene):
                 highlight_range=(lam_small - sigma_small, lam_small + sigma_small),
             )
             small_charts.add(chart)
-        small_charts.arrange(DOWN, buff=0.4)
-        small_charts.shift(LEFT * 4)
+        small_charts.arrange(RIGHT, buff=0.2)
+        small_charts.shift(UP * 2.5)
 
         big_chart = PoissonPMFChart(
             max_k=30,
             y_max=0.12,
-            x_length=7,
-            y_length=5.5,
+            x_length=6.5,
+            y_length=3.0,
             bar_color=theme.primary,
             axis_config={
                 "include_numbers": True,
                 "stroke_width": 3,
-                "font_size": 22,
+                "font_size": 26,
             },
         )
         big_chart.set_lambda(
             lam_combined,
-            highlight_range=(lam_combined - sigma_combined, lam_combined + sigma_combined),
+            highlight_range=(
+                lam_combined - sigma_combined,
+                lam_combined + sigma_combined,
+            ),
         )
-        big_chart.shift(RIGHT * 3)
+        big_chart.shift(DOWN * 1.5)
 
         # -- Vertical marker lines --
         def _vline(chart: PoissonPMFChart, x: float, color, dashed: bool = True):
@@ -254,8 +265,8 @@ class PoissonSum(ThemedScene):
             bottom = chart.x_to_point(x)
             top = np.array([bottom[0], chart.axes.c2p(0, chart.axes.y_range[1])[1], 0])
             if dashed:
-                return DashedLine(bottom, top, color=color, stroke_width=2)
-            return Line(bottom, top, color=color, stroke_width=2)
+                return DashedLine(bottom, top, color=color, stroke_width=4)
+            return Line(bottom, top, color=color, stroke_width=4)
 
         # Small chart markers
         small_markers = VGroup()
@@ -271,11 +282,15 @@ class PoissonSum(ThemedScene):
         big_naive_line = _vline(big_chart, naive_sum, theme.accent)
 
         # -- Equations --
-        small_eq = MathTex(
-            r"\mu + \sigma = " + f"{mu_plus_sigma_each:.1f}",
-            font_size=28,
-            color=theme.accent,
-        ).next_to(small_charts, RIGHT, buff=-LARGE_BUFF)
+        small_eq = (
+            MathTex(
+                r"\mu + \sigma = " + f"{mu_plus_sigma_each:.1f}",
+                font_size=28,
+                color=theme.accent,
+            )
+            .next_to(small_charts, DOWN, buff=SMALL_BUFF * 2)
+            .shift(LEFT * 2.2)
+        )
 
         big_sigma_eq = MathTex(
             r"\mu + \sigma = " + f"{actual_mu_plus_sigma:.1f}",
