@@ -123,7 +123,7 @@ class PoissonVariance(ThemedScene):
         self.wait(1)
         self.play(
             lam_tracker.animate.set_value(25.0),
-            run_time=12,
+            run_time=5,
             rate_func=linear,
         )
         self.wait(2)
@@ -273,7 +273,7 @@ class PoissonSum(ThemedScene):
         # -- Equations --
         small_eq = MathTex(
             r"\mu + \sigma = " + f"{mu_plus_sigma_each:.1f}",
-            font_size=24,
+            font_size=28,
             color=theme.accent,
         ).next_to(small_charts, RIGHT, buff=-LARGE_BUFF)
 
@@ -306,43 +306,37 @@ class PoissonSum(ThemedScene):
         ).next_to(brace, DOWN, buff=SMALL_BUFF)
 
         # -- Animation --
-        # Phase 1: Small charts
+        # Small charts
         self.play(FadeIn(small_charts), run_time=0.8)
-        self.wait(0.5)
-
-        # Phase 2: Markers on small charts
         self.play(
             *[FadeIn(m) for m in small_markers],
             Write(small_eq),
-            run_time=0.8,
+            run_time=0.6,
         )
-        self.wait(1)
-
-        # Phase 3: Big chart
-        self.play(FadeIn(big_chart), run_time=0.8)
         self.wait(0.5)
 
-        # Phase 4: Big chart μ and μ+σ markers
+        # Big chart
+        self.play(FadeIn(big_chart), run_time=0.8)
         self.play(
             FadeIn(big_mu_line),
             FadeIn(big_sigma_line),
             Write(big_sigma_eq),
-            run_time=0.8,
+            run_time=0.6,
         )
-        self.wait(1)
+        self.wait(0.4)
 
-        # Phase 5: Naive sum marker
+        # Naive sum marker
         self.play(
             FadeIn(big_naive_line),
             Write(big_naive_eq),
-            run_time=0.8,
+            run_time=0.6,
         )
-        self.wait(0.5)
+        self.wait(0.2)
 
-        # Phase 6: Brace showing the gap
+        # Brace showing the gap
         self.play(
             FadeIn(brace),
             Write(brace_label),
-            run_time=0.8,
+            run_time=0.4,
         )
-        self.wait(3)
+        self.wait(1)
